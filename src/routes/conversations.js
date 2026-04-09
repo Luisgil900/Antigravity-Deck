@@ -18,28 +18,56 @@ function clearCache() {
 
 module.exports = function setupConversationsRoutes(app) {
     // Conversations for a specific workspace (filtered by workspace URI)
+    // Fix: search ALL LS instances to find cascades matching this workspace,
+    // because a chat can be created on a different LS instance while still
+    // having the correct workspaceFolderAbsoluteUri in its metadata.
     app.get('/api/workspaces/:name/conversations', async (req, res) => {
-        const inst = getInstanceByName(decodeURIComponent(req.params.name));
-        if (!inst) return res.status(400).json({ error: 'Unknown workspace' });
+        const targetInst = getInstanceByName(decodeURIComponent(req.params.name));
+        if (!targetInst) return res.status(400).json({ error: 'Unknown workspace' });
 
         try {
-            // Get all trajectories from this LS instance
-            const trajData = await callApiOnInstance(inst, 'GetAllCascadeTrajectories');
+            const wsUri = targetInst.workspaceFolderUri;
+            const filtered = {};
 
-            // Filter: only keep cascades whose workspace URI matches this instance
-            if (inst.workspaceFolderUri && trajData.trajectorySummaries) {
-                const wsUri = inst.workspaceFolderUri;
-                const filtered = {};
-                for (const [id, info] of Object.entries(trajData.trajectorySummaries)) {
-                    const cascadeWsUris = (info.workspaces || []).map(w => w.workspaceFolderAbsoluteUri);
-                    if (cascadeWsUris.some(uri => uri === wsUri)) {
-                        filtered[id] = info;
+            // Search ALL LS instances for cascades matching this workspace URI
+            for (const inst of lsInstances) {
+                try {
+                    const trajData = await callApiOnInstance(inst, 'GetAllCascadeTrajectories');
+                    if (!trajData?.trajectorySummaries) continue;
+
+                    for (const [id, info] of Object.entries(trajData.trajectorySummaries)) {
+                        if (filtered[id]) continue; // already found via another instance
+
+                        // Check cascade's workspace URIs
+                        const cascadeWs = info.workspaces || [];
+                        const cascadeWsUris = (Array.isArray(cascadeWs) ? cascadeWs : [])
+                            .map(w => w.workspaceFolderAbsoluteUri)
+                            .filter(Boolean);
+
+                        // Also check trajectoryMetadata.workspaceUris (may contain encoded URIs)
+                        const metaUris = [];
+                        if (info.trajectoryMetadata) {
+                            const meta = info.trajectoryMetadata;
+                            const rawUris = meta.workspaceUris;
+                            if (rawUris) {
+                                const uriList = Array.isArray(rawUris) ? rawUris : [rawUris];
+                                for (const u of uriList) {
+                                    if (typeof u === 'string') metaUris.push(decodeURIComponent(u));
+                                }
+                            }
+                        }
+
+                        const allUris = [...cascadeWsUris, ...metaUris];
+
+                        // Match: any URI matches the target workspace URI (case-insensitive for Windows)
+                        if (wsUri && allUris.some(uri => uri.toLowerCase() === wsUri.toLowerCase())) {
+                            filtered[id] = info;
+                        }
                     }
-                }
-                trajData.trajectorySummaries = filtered;
+                } catch { /* skip unreachable instances */ }
             }
 
-            res.json(trajData);
+            res.json({ trajectorySummaries: filtered });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
