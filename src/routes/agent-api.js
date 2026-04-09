@@ -16,6 +16,7 @@ const SendSchema = z.object({
     message: z.string().min(1).max(100000),
     action: z.enum(['accept', 'reject']).optional(),
     authorName: z.string().max(200).optional(),
+    modelId: z.string().max(100).optional(),
 }).strict();
 
 const SwitchWorkspaceSchema = z.object({
@@ -96,6 +97,7 @@ module.exports = function setupAgentApiRoutes(app) {
                 const result = await session.sendMessage(body.message, {
                     action: body.action || null,
                     authorName: body.authorName || null,
+                    modelId: body.modelId || null,
                 });
 
                 res.write(`event: response\ndata: ${JSON.stringify(result)}\n\n`);
@@ -114,6 +116,7 @@ module.exports = function setupAgentApiRoutes(app) {
                 const result = await session.sendMessage(body.message, {
                     action: body.action || null,
                     authorName: body.authorName || null,
+                    modelId: body.modelId || null,
                 });
 
                 if (result.busy) {

@@ -80,7 +80,7 @@ class AgentSession extends EventEmitter {
     async sendMessage(text, opts = {}) {
         if (this._destroyed) throw new Error('Session destroyed');
 
-        const { action = null, authorName = null } = opts;
+        const { action = null, authorName = null, modelId = null } = opts;
         const messageToSend = authorName ? `${authorName}: ${text}` : text;
 
         this._lastActivity = Date.now();
@@ -102,7 +102,7 @@ class AgentSession extends EventEmitter {
 
         // Send message to cascade
         try {
-            await cascadeSend(this._cascadeId, messageToSend, { inst: this._lsInst });
+            await cascadeSend(this._cascadeId, messageToSend, { inst: this._lsInst, modelId });
             this._addLog('system', `Sent to cascade ${this._shortId()} — waiting for response`);
         } catch (e) {
             this._setBusy(false);
