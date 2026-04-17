@@ -19,6 +19,7 @@ let pollTimer = null;
 let currentInterval = POLL_INTERVAL;
 const lastCascadeStatusMap = {}; // per-conversation status tracking
 let isPollRunning = false; // prevent concurrent poll ticks
+let pollTickCount = 0; // V7: counter for periodic meta broadcasts
 const knownConvIds = new Set(); // track all discovered conversation IDs
 const knownConvSummaries = new Map(); // track summaries natively
 
@@ -126,6 +127,29 @@ async function pollNow() {
         }
         if (hasNewConversations) {
             console.log(`[poll] New conversations discovered → notifying frontend`);
+            _broadcastAll({ type: 'conversations_updated' });
+        }
+
+        // V7: Periodic meta broadcast — every 6 ticks (~30s) force frontend refresh
+        // This ensures conversation list stays fresh even when no cascade status changes
+        pollTickCount++;
+        if (pollTickCount % 6 === 0) {
+            // Emit lightweight meta update with step counts for badge updates
+            const metaEntries = [];
+            for (const [cid, info] of convToPoll) {
+                metaEntries.push({
+                    conversationId: cid,
+                    stepCount: info.stepCount || 0,
+                    status: info.status || '',
+                    summary: info.summary || '',
+                });
+            }
+            _broadcastAll({
+                type: 'conversation_meta_update',
+                conversations: metaEntries,
+                timestamp: Date.now(),
+            });
+            // Also trigger full refresh periodically
             _broadcastAll({ type: 'conversations_updated' });
         }
 

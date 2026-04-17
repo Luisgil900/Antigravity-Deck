@@ -288,6 +288,12 @@ export function useWebSocket() {
             setState(prev => ({ ...prev, conversationsVersion: prev.conversationsVersion + 1 }));
         });
 
+        // V7: Lightweight meta update — receives step counts for all conversations
+        // Used for badge updates without triggering full sidebar refresh
+        const offConvMeta = wsService.on('conversation_meta_update', () => {
+            setState(prev => ({ ...prev, conversationsVersion: prev.conversationsVersion + 1 }));
+        });
+
         const offResources = wsService.on('workspace_resources', (data) => {
             // Resource monitor broadcast — update workspace CPU/RAM stats
             setState(prev => ({ ...prev, workspaceResources: (data.data as ResourceSnapshot) || {} as ResourceSnapshot }));
@@ -332,6 +338,7 @@ export function useWebSocket() {
             offStepUpdated();
             offCascadeStatus();
             offConvUpdated();
+            offConvMeta();
             offResources();
             offStaleReconnect(); // V5: cleanup del stale reconnect listener
         };
