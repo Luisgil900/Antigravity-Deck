@@ -354,24 +354,24 @@ module.exports = function setupAgentApiRoutes(app) {
             const { sendMessage } = require('../cascade');
             const inst = resolveLsInst('ANTIGRAVITY');
 
-            // Send as user message to the active cascade
-            // The model in that chat will see this and respond automatically
-            const result = await sendMessage(cascadeId, message, {
+            // Send as user message to the active cascade (Fire and forget, simulates Frontend)
+            sendMessage(cascadeId, message, {
                 modelId: modelId || undefined,
                 timeoutMs: 30000,
                 inst,
-            });
-            // Force a poll tick to update frontend steps instantly
+            }).catch(e => console.error('[inject-to-chat] Send error:', e.message));
+
+            // Force a poll tick immediately (wait just 200ms to allow LS stream to begin)
             try {
                 const poller = require('../poller');
                 if (poller.pollNow) {
-                    setTimeout(() => poller.pollNow(), 500); // 500ms delay to ensure LS has updated
+                    setTimeout(() => poller.pollNow(), 200); 
                 }
             } catch (pollErr) {
                 console.error('[inject-to-chat] Error forcing poll:', pollErr.message);
             }
 
-            res.json({ ok: true, cascadeId, result: result || {} });
+            res.json({ ok: true, cascadeId });
 
         } catch (e) {
             console.error('[inject-to-chat] Error:', e.message);

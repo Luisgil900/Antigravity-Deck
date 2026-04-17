@@ -579,6 +579,8 @@ module.exports = {
     triggerBridgeRelay, pollNow,
     // Exposed for cleanup.js — not for general use
     _knownConvIds: knownConvIds,
+    _knownConvSummaries: knownConvSummaries,
     _lastCascadeStatusMap: lastCascadeStatusMap,
     _cascadeInstanceMap: cascadeInstanceMap,
 };
+

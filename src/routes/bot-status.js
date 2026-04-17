@@ -143,10 +143,6 @@ module.exports = function (app) {
     app.get('/api/bot-chat-info/:chatId', (req, res) => {
         try {
             const chatId = req.params.chatId;
-            // Read from conversations state if available
-            const stateDir = path.join(process.cwd(), 'cascade_data');
-            const chatDir = path.join(stateDir, chatId);
-            
             let info = {
                 id: chatId,
                 exists: false,
@@ -154,6 +150,29 @@ module.exports = function (app) {
                 lastUpdate: null,
                 title: chatId.substring(0, 8) + '...',
             };
+
+            try {
+                // Try to get live status from the poller's known summaries (updated every few seconds)
+                const poller = require('../poller');
+                const summary = poller._knownConvSummaries?.get(chatId);
+                
+                if (summary) {
+                    info.exists = true;
+                    // summary obj structure from Language Server
+                    info.stepCount = summary.totalStepCount || 0;
+                    info.lastUpdate = new Date().toISOString(); // It's live!
+                    if (summary.trajectoryMetadata?.title) {
+                        info.title = summary.trajectoryMetadata.title;
+                    }
+                    return res.json(info);
+                }
+            } catch (err) {
+                console.error('[bot-chat-info] poller error:', err.message);
+            }
+
+            // Fallback to local cascade_data only if poller has no info yet
+            const stateDir = path.join(process.cwd(), 'cascade_data');
+            const chatDir = path.join(stateDir, chatId);
             
             if (fs.existsSync(chatDir)) {
                 info.exists = true;
