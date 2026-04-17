@@ -193,15 +193,7 @@ async function pollNow() {
                     triggerBridgeRelay(cascadeId);
                     // Notify frontend to refresh conversation list (summary/title may have changed)
                     _broadcastAll({ type: 'conversations_updated' });
-
-                    // Invalidate step cache: LS finalizes step content after cascade completes.
-                    // Delete cache so next set_conversation re-fetches fresh from LS.
-                    delete stepCache[cascadeId];
-                    console.log(`[post-done] ${cascadeId.substring(0, 8)} cache invalidated`);
-
-                    // Skip auto-cache and polling below — cache was just invalidated,
-                    // LS data is stale, will be re-fetched on next set_conversation
-                    continue;
+                    // Removed cache deletion here to ensure UI stays synced during consecutive messages!
                 }
 
                 // Fast-cascade relay: first time seeing this cascade and it's already IDLE/DONE
@@ -586,6 +578,8 @@ module.exports = {
     _lastCascadeStepCountMap: lastCascadeStepCountMap,
     _cascadeInstanceMap: cascadeInstanceMap,
 };
+
+
 
 
 
