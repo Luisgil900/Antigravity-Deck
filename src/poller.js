@@ -576,6 +576,7 @@ function startSSE() {
 
 module.exports = {
     startPolling, startSSE, getInstanceForCascade, registerCascadeInstance,
+    triggerBridgeRelay, pollNow,
     // Exposed for cleanup.js — not for general use
     _knownConvIds: knownConvIds,
     _lastCascadeStatusMap: lastCascadeStatusMap,

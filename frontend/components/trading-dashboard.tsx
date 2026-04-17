@@ -124,11 +124,15 @@ export function TradingDashboard({ onOpenChat }: { onOpenChat?: (chatId: string)
   const [chatInfos, setChatInfos] = useState<Record<string, ChatInfo>>({});
   const refreshTimer = useRef<NodeJS.Timeout | null>(null);
 
+  const statusRef = useRef<BotStatus | null>(null);
+
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/bot-status`, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setStatus(await res.json());
+      const data = await res.json();
+      setStatus(data);
+      statusRef.current = data;
     } catch {} finally { setLoading(false); }
   }, []);
 
@@ -150,10 +154,17 @@ export function TradingDashboard({ onOpenChat }: { onOpenChat?: (chatId: string)
   }, []);
 
   useEffect(() => {
-    fetchStatus(); fetchLogs();
-    refreshTimer.current = setInterval(() => { fetchStatus(); fetchLogs(); }, 5000);
+    const doFetch = () => {
+      fetchStatus();
+      fetchLogs();
+      const st = statusRef.current;
+      if (st?.bot_chats?.cognitive_id) fetchChatInfo(st.bot_chats.cognitive_id);
+      if (st?.bot_chats?.operative_id) fetchChatInfo(st.bot_chats.operative_id);
+    };
+    doFetch();
+    refreshTimer.current = setInterval(doFetch, 5000);
     return () => { if (refreshTimer.current) clearInterval(refreshTimer.current); };
-  }, [fetchStatus, fetchLogs]);
+  }, [fetchStatus, fetchLogs, fetchChatInfo]);
 
   // Fetch chat info when bot_chats available
   useEffect(() => {

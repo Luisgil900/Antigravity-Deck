@@ -361,6 +361,15 @@ module.exports = function setupAgentApiRoutes(app) {
                 timeoutMs: 30000,
                 inst,
             });
+            // Force a poll tick to update frontend steps instantly
+            try {
+                const poller = require('../poller');
+                if (poller.pollNow) {
+                    setTimeout(() => poller.pollNow(), 500); // 500ms delay to ensure LS has updated
+                }
+            } catch (pollErr) {
+                console.error('[inject-to-chat] Error forcing poll:', pollErr.message);
+            }
 
             res.json({ ok: true, cascadeId, result: result || {} });
 
