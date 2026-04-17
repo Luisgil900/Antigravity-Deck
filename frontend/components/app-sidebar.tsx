@@ -43,7 +43,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable, Workflow } from "lucide-react"
+import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable, Workflow, BarChart3 } from "lucide-react"
 
 import { WorkspaceGroup } from "./sidebar/workspace-group"
 import type { ConvSummary, WorkspaceData } from "./sidebar/workspace-group"
@@ -64,6 +64,7 @@ interface AppSidebarProps {
     onShowConnect: () => void
     onShowSourceControl: () => void
     onShowResources: () => void
+    onShowDashboard: () => void
     onGoHome: () => void
     activeWorkspace: string | null
     workspaceResources?: ResourceSnapshot | null
@@ -87,6 +88,7 @@ export function AppSidebar({
     onShowConnect,
     onShowSourceControl,
     onShowResources,
+    onShowDashboard,
     onGoHome,
     activeWorkspace,
     workspaceResources,
@@ -491,6 +493,12 @@ export function AppSidebar({
                     <SidebarGroup>
                         <SidebarGroupContent>
                             <SidebarMenu>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton onClick={onShowDashboard} tooltip="Trading Dashboard" className="text-xs">
+                                        <BarChart3 className="shrink-0 text-purple-400" />
+                                        <span>Trading Dashboard</span>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
                                 <SidebarMenuItem>
                                     <SidebarMenuButton onClick={onShowAgentHub} tooltip="Agent Hub" className="text-xs">
                                         <Bot className="shrink-0" />

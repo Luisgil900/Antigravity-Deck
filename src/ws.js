@@ -100,4 +100,4 @@ function broadcastToGlobal(data) {
     });
 }
 
-module.exports = { setupWebSocket, sendToOne, broadcast, broadcastAll, broadcastToGlobal };
+module.exports = { setupWebSocket, sendToOne, broadcast, broadcastAll, broadcastToGlobal, clientConvMap };

@@ -14,12 +14,12 @@ if (portIdx > -1 && process.argv[portIdx + 1]) {
 }
 
 const PORT = portOverride || parseInt(process.env.PORT, 10) || 3500;
-const POLL_INTERVAL = 3000;
-const FAST_POLL_INTERVAL = 1000;  // Active cascade (running / waiting for user)
-const SLOW_POLL_INTERVAL = 5000;  // Idle
-const BATCH_SIZE = 200;
-const STEP_WINDOW_SIZE = 500;       // max steps to hold in memory per conversation
-const STEP_LOAD_CHUNK = 200;        // how many older steps to load on scroll-up
+const POLL_INTERVAL = 1000;
+const FAST_POLL_INTERVAL = 300;  // Active cascade (running / waiting for user)
+const SLOW_POLL_INTERVAL = 3000;  // Idle
+const BATCH_SIZE = 500;
+const STEP_WINDOW_SIZE = 1500;       // max steps to hold in memory per conversation
+const STEP_LOAD_CHUNK = 500;        // how many older steps to load on scroll-up
 
 // --- Persistent settings ---
 const SETTINGS_PATH = path.join(__dirname, '..', 'settings.json');
@@ -72,7 +72,7 @@ const DEFAULT_BRIDGE_SETTINGS = {
     discordBotToken: '',
     discordChannelId: '',
     discordGuildId: '',
-    stepSoftLimit: 500,
+    stepSoftLimit: 1500,
     allowedBotIds: [],
     autoStart: false,
     currentWorkspace: '',
@@ -111,7 +111,7 @@ const DEFAULT_AGENT_API_SETTINGS = {
     enabled: true,
     maxConcurrentSessions: 5,
     sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
-    defaultStepSoftLimit: 500,
+    defaultStepSoftLimit: 1500,
 };
 
 let _agentApiSettings = null;

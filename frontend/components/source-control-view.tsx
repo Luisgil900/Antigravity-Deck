@@ -124,9 +124,32 @@ function CopyButton({ text }: { text: string }) {
 
 // ─── Syntax-highlighted code viewer (react-syntax-highlighter) ───────────────
 
+import { MarkdownRenderer } from '@/components/markdown-renderer';
+
 function CodeViewer({ content, ext }: { content: string; ext?: string }) {
     const lang = extToLang(ext);
     const lines = content.split('\n').length;
+
+    if (ext === 'md' || ext === 'mdx') {
+        return (
+            <div className="flex flex-col h-full bg-background">
+                {/* Toolbar */}
+                <div className="flex items-center justify-between px-3 h-8 border-b border-border/20 bg-muted/5 shrink-0">
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40">
+                        <span>{lines} lines</span>
+                        <span>·</span>
+                        <span className="uppercase tracking-wider">MARKDOWN</span>
+                    </div>
+                </div>
+                {/* Markdown Read Mode */}
+                <div className="flex-1 overflow-auto p-4 sm:p-6 text-sm selection:bg-primary/20">
+                    <div className="max-w-4xl mx-auto prose prose-invert prose-sm pb-8">
+                        <MarkdownRenderer content={content} />
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-full">

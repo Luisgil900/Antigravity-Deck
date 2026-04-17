@@ -1,7 +1,7 @@
 // === Antigravity Deck — Service Worker ===
 // Handles: PWA install, app shell caching, notification display, notification click
 
-const SW_VERSION = '1.1.0';
+const SW_VERSION = '1.3.0';
 const CACHE_NAME = `ag-deck-${SW_VERSION}`;
 
 // === Install ===
@@ -46,34 +46,46 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell (HTML pages, /_next/data/...) — stale-while-revalidate
-  // Serve cached version instantly, update cache in background
+  // App shell (HTML pages, /_next/data/...) — Network First (Erradica el Caché Fantasma)
+  // Al ser un bot de trading en vivo, siempre queremos la versión viva del servidor.
   const isNavigationOrData = event.request.mode === 'navigate' ||
     url.pathname.startsWith('/_next/data/') ||
-    url.pathname.startsWith('/_next/') ||
-    event.request.destination === 'script' ||
-    event.request.destination === 'style';
+    event.request.destination === 'document';
 
-  // Sound files and icons — cache-first (unchanged)
+  // Archivos de audio e iconos — Cache First
   const cachePatterns = ['/sounds/', '/favicon'];
   const isStaticAsset = cachePatterns.some((p) => url.pathname.includes(p));
 
-  if (isNavigationOrData || isStaticAsset) {
+  if (isStaticAsset) {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>
         cache.match(event.request).then((cached) => {
-          const fetchPromise = fetch(event.request).then((response) => {
+          return cached || fetch(event.request).then((response) => {
             if (response.ok) cache.put(event.request, response.clone());
             return response;
-          }).catch(() => cached); // fallback to cache if offline
-          // Stale-while-revalidate: return cached immediately, update in background
-          return cached || fetchPromise;
+          });
         })
       )
     );
     return;
   }
-  // For everything else, let the browser handle it normally (no interception)
+
+  if (isNavigationOrData) {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        // Obtenemos del servidor y refrescamos cache silenciosamente
+        const resClone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+        return response;
+      }).catch(() => {
+        // Si hay error (offline), cargamos el caché fantasma como supervivencia
+        return caches.match(event.request);
+      })
+    );
+    return;
+  }
+  
+  // Para todo lo demás, el navegador actúa normal
 });
 
 // === Message from main thread — show notification ===
@@ -98,21 +110,36 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data?.json() || {};
   } catch {
-    data = { title: 'Antigravity Deck', body: event.data?.text() || 'New notification' };
+    data = { title: 'Antigravity Deck', body: event.data?.text() || 'Nueva notificación' };
   }
 
   const title = data.title || 'Antigravity Deck';
+  const tag_id = data.tag || 'ag-push';
   const options = {
     body: data.body || '',
     icon: '/favicon.ico',
     badge: '/favicon.ico',
-    tag: data.tag || 'ag-push',
+    tag: tag_id,
     renotify: true,
     requireInteraction: false,
     data: data.data || {},
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      // 🚨 BLINDAJE ANTI-DUPLICIDAD:
+      // Si la app está abierta y visible en pantalla, asumimos que el WebSocket
+      // maneja visualmente la alerta (animación in-app o audio focalizado).
+      // Por tanto, bloqueamos que el SO Android bote la alerta Push nativa ruidosa.
+      const isFocused = clients.some((client) => client.visibilityState === 'visible');
+      if (isFocused) {
+        console.log('[SW] Push abortado: La App está visible. WebSocket activo.');
+        return null;
+      }
+      
+      return self.registration.showNotification(title, options);
+    })
+  );
 });
 
 // === Notification click — focus or open the app ===

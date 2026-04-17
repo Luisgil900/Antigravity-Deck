@@ -8,16 +8,116 @@ import { RawJsonViewer } from './raw-json-viewer';
 import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, FileText, Bot, AlertTriangle } from 'lucide-react';
+import { Copy, Check, FileText, Bot, AlertTriangle, Volume2, VolumeX, Pause } from 'lucide-react';
 import { API_BASE } from '@/lib/config';
 import { authHeaders } from '@/lib/auth';
 
+// === TTS robusto para Android/Chrome ===
+// Usa cancel + re-speak con offset en lugar de pause/resume (roto en Chrome Android).
+// BUG CLAVE: speechSynthesis.cancel() DISPARA onend/onerror SINCRÓNICAMENTE,
+// lo que reseteaba charOffset a 0 antes de poder preservarlo.
+// Solución: isPausingRef protege el offset durante pausa intencional.
+import { useRef } from 'react';
+
+export function useAndroidSafeTTS(rawContent: string | null) {
+    const [ttsState, setTtsState] = useState<'idle' | 'playing' | 'paused'>('idle');
+    const [isTTSAvailable, setIsTTSAvailable] = useState(false);
+    const charOffsetRef = useRef(0);
+    const contentRef = useRef(rawContent);
+    const stateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+    const isPausingRef = useRef(false); // Guard: prevents onend from resetting offset during pause
+
+    // Keep content ref in sync
+    contentRef.current = rawContent;
+
+    useEffect(() => {
+        setIsTTSAvailable(typeof window !== 'undefined' && 'speechSynthesis' in window);
+    }, []);
+
+    const updateState = useCallback((s: 'idle' | 'playing' | 'paused') => {
+        stateRef.current = s;
+        setTtsState(s);
+    }, []);
+
+    const speakFrom = useCallback((offset: number) => {
+        if (typeof window === 'undefined' || !window.speechSynthesis) return;
+        const text = contentRef.current;
+        if (!text) return;
+
+        isPausingRef.current = false;
+        window.speechSynthesis.cancel(); // Clean any previous utterance
+
+        const clean = text.replace(/[#*`_\[\]()>|~\-]/g, ' ').replace(/\s+/g, ' ');
+        const remaining = clean.substring(offset);
+        if (!remaining.trim()) { updateState('idle'); charOffsetRef.current = 0; return; }
+
+        const utt = new SpeechSynthesisUtterance(remaining);
+        utt.lang = 'es-ES';
+
+        // Prevent Garbage Collection on Android Chrome
+        (window as any).__ttsUtt = utt;
+
+        utt.onboundary = (ev: SpeechSynthesisEvent) => {
+            if (ev.name === 'word') {
+                charOffsetRef.current = offset + ev.charIndex;
+            }
+        };
+
+        // CRITICAL: Only reset offset if this was a NATURAL end, not an intentional pause
+        utt.onend = () => {
+            if (!isPausingRef.current) {
+                updateState('idle');
+                charOffsetRef.current = 0;
+                (window as any).__ttsUtt = null;
+            }
+        };
+        utt.onerror = (ev: SpeechSynthesisErrorEvent) => {
+            // 'interrupted' and 'canceled' errors come from intentional cancel() calls
+            if (ev.error === 'interrupted' || ev.error === 'canceled' || isPausingRef.current) {
+                return; // Don't reset - this was an intentional pause
+            }
+            updateState('idle');
+            charOffsetRef.current = 0;
+            (window as any).__ttsUtt = null;
+        };
+
+        window.speechSynthesis.speak(utt);
+        updateState('playing');
+    }, [updateState]);
+
+    const handleTTS = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+        const cur = stateRef.current;
+        if (cur === 'playing') {
+            // === PAUSE ===
+            // Set guard BEFORE cancel() because cancel() fires onend/onerror synchronously
+            isPausingRef.current = true;
+            window.speechSynthesis.cancel();
+            updateState('paused');
+            // charOffsetRef.current is PRESERVED because isPausingRef blocked the reset
+        } else if (cur === 'paused') {
+            // === RESUME === Re-speak from saved offset
+            speakFrom(charOffsetRef.current);
+        } else {
+            // === PLAY === Start from beginning
+            charOffsetRef.current = 0;
+            speakFrom(0);
+        }
+    }, [speakFrom, updateState]);
+
+    return { ttsState, isTTSAvailable, handleTTS };
+}
+
 // View an MD artifact file in a Sheet (side panel)
-function ArtifactPreview({ uri }: { uri: string }) {
+export function ArtifactPreview({ uri, displayName }: { uri: string; displayName?: string }) {
     const [content, setContent] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const fileName = uri.split('/').pop() || 'file';
+    const fileName = displayName || uri.split('/').pop() || 'file';
+
+    const { ttsState, isTTSAvailable, handleTTS } = useAndroidSafeTTS(content);
 
     const loadFile = useCallback(() => {
         if (content || loading) return; // already loaded or loading
@@ -55,10 +155,24 @@ function ArtifactPreview({ uri }: { uri: string }) {
             </SheetTrigger>
             <SheetContent side="right" className="w-full sm:w-[600px] sm:max-w-[600px] p-0 flex flex-col overflow-hidden">
                 <SheetHeader className="px-5 pt-5 pb-3 border-b border-border/50 shrink-0">
-                    <SheetTitle className="flex items-center gap-2 text-sm">
-                        <FileText className="h-4 w-4" />
-                        <span>{fileName}</span>
-                    </SheetTitle>
+                    <div className="flex items-center justify-between">
+                        <SheetTitle className="flex items-center gap-2 text-sm">
+                            <FileText className="h-4 w-4" />
+                            <span>{fileName}</span>
+                        </SheetTitle>
+                        {isTTSAvailable && content && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                onClick={handleTTS}
+                                title={ttsState === 'playing' ? "Pause reading" : ttsState === 'paused' ? "Resume reading" : "Read aloud"}
+                            >
+                                {ttsState === 'playing' ? <Pause className="h-4 w-4 mr-1" /> : <Volume2 className="h-4 w-4 mr-1" />}
+                                {ttsState === 'playing' ? "Pause" : ttsState === 'paused' ? "Resume" : "Read"}
+                            </Button>
+                        )}
+                    </div>
                     <SheetDescription className="text-xs text-muted-foreground/70 truncate">
                         {(() => { try { const p = decodeURIComponent(new URL(uri).pathname); return /^\/[a-zA-Z]:/.test(p) ? p.substring(1) : p; } catch { return uri.replace('file:///', ''); } })()}
                     </SheetDescription>
@@ -85,6 +199,9 @@ function ArtifactPreview({ uri }: { uri: string }) {
 export const AgentResponse = memo(function AgentResponse({ step, index }: { step: Step; index: number }) {
     const { copied, copy } = useCopy();
     const content = useMemo(() => extractStepContent(step) || '', [step]);
+    
+    // TTS State
+    const { ttsState, isTTSAvailable, handleTTS } = useAndroidSafeTTS(content);
 
     // Extract review file URIs from NOTIFY_USER steps
     // Binary protobuf puts paths in field "1" instead of reviewAbsoluteUris
@@ -120,7 +237,18 @@ export const AgentResponse = memo(function AgentResponse({ step, index }: { step
                     </div>
                 )}
 
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 px-1 rounded backdrop-blur">
+                    {isTTSAvailable && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 text-muted-foreground/50 hover:text-foreground"
+                            onClick={handleTTS}
+                            title={ttsState === 'playing' ? "Pause reading" : ttsState === 'paused' ? "Resume reading" : "Read aloud"}
+                        >
+                            {ttsState === 'playing' ? <Pause className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+                        </Button>
+                    )}
                     <RawJsonViewer step={step} />
                     <Button
                         variant="ghost"

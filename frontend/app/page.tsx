@@ -30,6 +30,7 @@ import { AgentConnectPanel } from '@/components/agent-hub/connect-panel';
 import { OrchestratorView } from '@/components/orchestrator-view';
 import { SourceControlView } from '@/components/source-control-view';
 import { ResourceMonitorView } from '@/components/resource-monitor-view';
+import { TradingDashboard } from '@/components/trading-dashboard';
 import { WorkspaceOnboardModal } from '@/components/workspace-onboard-modal';
 import { notificationService } from '@/lib/notifications';
 import { initAppLogger } from '@/lib/app-logger';
@@ -161,6 +162,7 @@ export default function Home() {
   // NEW: When true, show Source Control / IDE view in main panel
   const [showSourceControl, setShowSourceControl] = useState(false);
   const [showResources, setShowResources] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(() => getStoredValue('antigravity-show-dashboard', false));
   // Bumped when sidebar creates a workspace, so panels refresh their lists
   const [wsVersion, setWsVersion] = useState(0);
 
@@ -182,6 +184,7 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('antigravity-show-connect', JSON.stringify(showConnect)); }, [showConnect]);
   useEffect(() => { localStorage.setItem('antigravity-show-orchestrator', JSON.stringify(showOrchestrator)); }, [showOrchestrator]);
   useEffect(() => { localStorage.setItem('antigravity-show-analytics', JSON.stringify(showAnalytics)); }, [showAnalytics]);
+  useEffect(() => { localStorage.setItem('antigravity-show-dashboard', JSON.stringify(showDashboard)); }, [showDashboard]);
 
   // Persist currentConvId and restore on mount
   useEffect(() => {
@@ -223,6 +226,7 @@ export default function Home() {
     setShowOrchestrator(false);
     setShowSourceControl(false);
     setShowResources(false);
+    setShowDashboard(false);
   }, []);
 
   // === Sidebar: click workspace → show conversation list ===
@@ -324,6 +328,14 @@ export default function Home() {
     resetPanels();
     setActiveWorkspace(null);
     setShowResources(true);
+  }, [selectConversation, resetPanels]);
+
+  // === Show Trading Dashboard ===
+  const handleShowDashboard = useCallback(() => {
+    selectConversation(null);
+    resetPanels();
+    setActiveWorkspace(null);
+    setShowDashboard(true);
   }, [selectConversation, resetPanels]);
 
   // === Go Home — reset all navigation state to welcome screen ===
@@ -445,8 +457,8 @@ export default function Home() {
   // === Determine what to show in main panel ===
   // When LS not detected, force welcome/detection screen regardless of stored state
   const showChat = detected && (currentConvId !== null || newChatMode);
-  const showConversationList = detected && !showChat && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources && activeWorkspace !== null;
-  const showWelcome = !detected || (!showChat && !showConversationList && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources);
+  const showConversationList = detected && !showChat && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources && !showDashboard && activeWorkspace !== null;
+  const showWelcome = !detected || (!showChat && !showConversationList && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources && !showDashboard);
 
   return (
     <AuthGate>
@@ -468,6 +480,7 @@ export default function Home() {
           onShowConnect={handleShowConnect}
           onShowSourceControl={handleShowSourceControl}
           onShowResources={handleShowResources}
+          onShowDashboard={handleShowDashboard}
           onGoHome={handleGoHome}
           onWorkspaceCreated={handleWorkspaceCreated}
           onConvDeleted={handleConvDeleted}
@@ -694,6 +707,20 @@ export default function Home() {
           {showResources && (
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               <ResourceMonitorView />
+            </div>
+          )}
+
+          {/* Trading Dashboard panel */}
+          {detected && showDashboard && (
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              <TradingDashboard
+                onOpenChat={(chatId) => {
+                  if (activeWorkspace) {
+                    resetPanels();
+                    selectConversation(chatId);
+                  }
+                }}
+              />
             </div>
           )}
 

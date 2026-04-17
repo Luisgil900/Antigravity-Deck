@@ -20,6 +20,8 @@ let currentInterval = POLL_INTERVAL;
 const lastCascadeStatusMap = {}; // per-conversation status tracking
 let isPollRunning = false; // prevent concurrent poll ticks
 const knownConvIds = new Set(); // track all discovered conversation IDs
+const knownConvSummaries = new Map(); // track summaries natively
+
 const quietPoll = !!process.env.QUIET_POLL; // suppress verbose logs in tunnel mode
 
 // --- Cascade→Instance persistent map ---
@@ -109,9 +111,17 @@ async function pollNow() {
         // Detect NEW conversations (not seen before) → push to frontend
         let hasNewConversations = false;
         for (const cascadeId of convToPoll.keys()) {
+            const info = convToPoll.get(cascadeId);
             if (!knownConvIds.has(cascadeId)) {
                 knownConvIds.add(cascadeId);
+                knownConvSummaries.set(cascadeId, info.summary);
                 hasNewConversations = true;
+            } else {
+                // If title was modified externally, trigger UI update
+                if (knownConvSummaries.get(cascadeId) !== info.summary) {
+                    knownConvSummaries.set(cascadeId, info.summary);
+                    hasNewConversations = true;
+                }
             }
         }
         if (hasNewConversations) {
@@ -186,7 +196,22 @@ async function pollNow() {
             const isRunning = info.status === 'CASCADE_RUN_STATUS_RUNNING' ||
                 info.status === 'CASCADE_RUN_STATUS_WAITING_FOR_USER';
             const cached = stepCache[cascadeId];
-            const serverAhead = cached && info.stepCount > (cached.baseIndex || 0) + cached.steps.length;
+            const cachedEnd = cached ? (cached.baseIndex || 0) + cached.steps.length : 0;
+            const serverAhead = cached && info.stepCount > cachedEnd;
+
+            // FIX: When LS has significantly more steps than JSON API can reach,
+            // the JSON API returns the same ~454 steps every poll cycle, never catching up.
+            // This happens when users switch models mid-conversation (e.g. Gemini→Claude).
+            // Invalidate cache and refetch everything with binary protobuf.
+            if (cached && serverAhead) {
+                const gap = info.stepCount - cachedEnd;
+                if (gap > 50) {
+                    console.log(`[poll] ${cascadeId.substring(0, 8)}: Large gap detected (cache=${cachedEnd}, server=${info.stepCount}, gap=${gap}). Invalidating cache.`);
+                    delete stepCache[cascadeId];
+                    await ensureCached(cascadeId, info.inst);
+                    continue; // Skip normal poll, cache was just rebuilt
+                }
+            }
 
             if (isRunning || serverAhead) {
                 await pollConversation(cascadeId, info);

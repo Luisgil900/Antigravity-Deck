@@ -112,10 +112,28 @@ module.exports = function setupConversationsRoutes(app) {
     app.get('/api/conversations/:id/steps', async (req, res) => {
         try {
             const inst = resolveInst(req);
+            const cascadeId = req.params.id;
+            const startIndex = parseInt(req.query.start) || 0;
+            const endIndex = parseInt(req.query.end) || 999999;
+            
+            // Try binary first to prevent JSON truncation on large conversations
+            try {
+                const { callApiBinary } = require('../api');
+                const binBuf = await callApiBinary(cascadeId, startIndex, endIndex, inst);
+                const binCount = countBinarySteps(binBuf);
+                if (binCount >= 0) { // Can be 0 if empty
+                    const steps = decodeBinarySteps(binBuf);
+                    return res.json({ steps });
+                }
+            } catch (binErr) {
+                console.log(`[Conversations] Binary steps failed for ${cascadeId}: ${binErr.message}, falling back to JSON`);
+            }
+
+            // Fallback to JSON API
             res.json(await callApi('GetCascadeTrajectorySteps', {
-                cascadeId: req.params.id,
-                startIndex: parseInt(req.query.start) || 0,
-                endIndex: parseInt(req.query.end) || 999999
+                cascadeId,
+                startIndex,
+                endIndex
             }, inst));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

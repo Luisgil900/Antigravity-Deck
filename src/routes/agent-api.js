@@ -25,6 +25,18 @@ const SwitchWorkspaceSchema = z.object({
 
 module.exports = function setupAgentApiRoutes(app) {
 
+    app.get('/api/models', async (req, res) => {
+        try {
+            const { callApi } = require('../api');
+            const { resolveLsInst } = require('../ls-utils');
+            const inst = resolveLsInst('ANTIGRAVITY');
+            const result = await callApi('GetAvailableModels', {}, inst);
+            res.json(result);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // ── Connect — create a new agent session ─────────────────────────────────
 
     app.post('/api/agent/connect', (req, res) => {
@@ -237,6 +249,60 @@ module.exports = function setupAgentApiRoutes(app) {
         }
     });
 
+    // ── Active Conversation ──────────────────────────────────────────────
+    // Get the current conversation ID the user is looking at.
+    // Used by agents to anchor themselves to the "Chat of the Day".
+    // Fallback: if no frontend is open, find the most active RUNNING cascade.
+    app.get('/api/agent/active-conversation', (req, res) => {
+        try {
+            const { clientConvMap } = require('../ws');
+            const values = Array.from(clientConvMap.values()).filter(Boolean);
+
+            if (values.length > 0) {
+                // Frontend connected — use the conversation the user is viewing
+                return res.json({ cascadeId: values[0], source: 'frontend' });
+            }
+
+            // Fallback: no frontend — find the active user conversation
+            // Strategy: the user's active conversation has the most steps AND is RUNNING
+            // Agent cascades are small (< 50 steps). The user's chat has 100+ steps.
+            const { stepCache } = require('../step-cache');
+            const candidates = [];
+
+            for (const [cid, cache] of Object.entries(stepCache)) {
+                const count = cache.stepCount || cache.steps?.length || 0;
+                // Only consider conversations with significant step counts (user chats)
+                if (count >= 50) {
+                    candidates.push({ cid, count });
+                }
+            }
+
+            // Sort by step count descending — most active conversation first
+            candidates.sort((a, b) => b.count - a.count);
+
+            // Allow query param override: ?cascadeId=xxx
+            const overrideCid = req.query.cascadeId;
+            if (overrideCid) {
+                return res.json({ cascadeId: overrideCid, source: 'override' });
+            }
+
+            if (candidates.length > 0) {
+                // Return the most active (highest step count) user conversation
+                const best = candidates[0];
+                return res.json({
+                    cascadeId: best.cid,
+                    source: 'fallback_most_active',
+                    steps: best.count,
+                    candidates: candidates.length,
+                });
+            }
+
+            res.json({ cascadeId: null, source: 'none' });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // ── Tunnel Info ─────────────────────────────────────────────────────────
 
     app.get('/api/tunnel-info', (req, res) => {
@@ -272,6 +338,35 @@ module.exports = function setupAgentApiRoutes(app) {
             res.json(parsed);
         } catch (e) {
             res.json({ active: false, error: e.message });
+        }
+    });
+
+    // ── Inject to Chat — send agent report as "user message" to active cascade ──
+
+    app.post('/api/agent/inject-to-chat', async (req, res) => {
+        try {
+            const { cascadeId, message, modelId } = req.body || {};
+
+            if (!cascadeId || !message) {
+                return res.status(400).json({ error: 'cascadeId and message are required' });
+            }
+
+            const { sendMessage } = require('../cascade');
+            const inst = resolveLsInst('ANTIGRAVITY');
+
+            // Send as user message to the active cascade
+            // The model in that chat will see this and respond automatically
+            const result = await sendMessage(cascadeId, message, {
+                modelId: modelId || undefined,
+                timeoutMs: 30000,
+                inst,
+            });
+
+            res.json({ ok: true, cascadeId, result: result || {} });
+
+        } catch (e) {
+            console.error('[inject-to-chat] Error:', e.message);
+            res.status(500).json({ error: e.message });
         }
     });
 };

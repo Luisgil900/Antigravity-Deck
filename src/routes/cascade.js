@@ -104,6 +104,34 @@ module.exports = function setupCascadeRoutes(app) {
 
     // Accept or reject pending code changes
     // HandleCascadeUserInteraction is a streaming RPC — use fire-and-forget
+
+    // ── DirectChat: Wait for cascade response ─────────────────────────────
+    // Blocking poll — waits until the model finishes, returns response text.
+    // Used by the Bot Python to read model responses from the main chat.
+    app.get('/api/cascade/:id/response', async (req, res) => {
+        try {
+            const { waitAndExtractResponse } = require('../cascade-relay');
+            const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
+
+            const fromStep = parseInt(req.query.fromStep || '-1');
+            const timeoutMs = parseInt(req.query.timeout || '300000'); // 5 min default
+
+            console.log(`[DirectChat] Waiting for response on ${req.params.id.substring(0, 8)} (fromStep=${fromStep}, timeout=${timeoutMs / 1000}s)`);
+
+            const result = await waitAndExtractResponse(req.params.id, {
+                inst,
+                fromStepIndex: fromStep,
+                timeoutMs,
+                log: (type, msg) => console.log(`[DirectChat] ${msg}`),
+            });
+
+            console.log(`[DirectChat] Response: ${result.text ? result.text.substring(0, 80) + '...' : '(empty)'} (step ${result.stepIndex})`);
+            res.json(result);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Accept or reject pending code changes
     // Searches ALL LS instances to find the one that owns this cascade
     app.post('/api/cascade/:id/accept', async (req, res) => {
         const { lsInstances } = require('../config');

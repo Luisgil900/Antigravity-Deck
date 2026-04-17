@@ -59,6 +59,9 @@ class WebSocketService {
                 // If hidden long enough, WS is likely stale even if readyState says OPEN
                 if (hiddenDuration > WebSocketService.STALE_THRESHOLD && this.ws) {
                     console.log('[WS-Service] stale socket — force reconnect');
+                    // V5: Emitir evento de despertar de inactividad para que websocket.ts
+                    // invalide TODA la caché local y fuerce re-sync completo
+                    this.emit('__ws_stale_reconnect', { hiddenDuration });
                     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
                     this.reconnectTimer = null;
                     try { this.ws.close(); } catch { /* ignore */ }
@@ -88,6 +91,8 @@ class WebSocketService {
             });
             document.addEventListener('resume', () => {
                 console.log('[WS-Service] page resumed — reconnecting');
+                // V5: Emitir stale_reconnect en resume (siempre, ya que freeze es inactividad total)
+                this.emit('__ws_stale_reconnect', { hiddenDuration: 999999 });
                 this.connect();
             });
         }

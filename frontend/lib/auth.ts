@@ -52,6 +52,7 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
     const key = getAuthKey();
     return {
         'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true', // Prevent Ngrok free tier 403 on AJAX calls
         ...(key ? { 'X-Auth-Key': key } : {}),
         ...extra,
     };

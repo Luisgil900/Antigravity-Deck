@@ -293,6 +293,35 @@ export function useWebSocket() {
             setState(prev => ({ ...prev, workspaceResources: (data.data as ResourceSnapshot) || {} as ResourceSnapshot }));
         });
 
+        // V5: Listener para despertar de inactividad de la PWA.
+        // Cuando ws-service.ts detecta que la app volvió de hidden >5s o de freeze,
+        // emite __ws_stale_reconnect. Aquí purgamos TODA la caché local y forzamos
+        // una re-sincronización completa, como si fuera un cold start de la UI.
+        const offStaleReconnect = wsService.on('__ws_stale_reconnect', (data) => {
+            console.log('[WS] ⚡ Stale reconnect — purging ALL cached state', data);
+            // 1. Limpiar localStorage de steps y detected cacheados
+            try { localStorage.removeItem(CACHE_KEY_STEPS); } catch {}
+            try { localStorage.removeItem(CACHE_KEY_DETECTED); } catch {}
+            // 2. Reset completo del estado interno
+            setState(prev => ({
+                ...prev,
+                steps: [],
+                baseIndex: 0,
+                stepCount: 0,
+                cascadeStatus: null,
+                lastUpdate: '',
+            }));
+            // 3. Re-cargar lista de conversaciones (sidebar)
+            loadConversationsRef.current();
+            // 4. Re-sync la conversación actual si hay una activa
+            const convId = currentConvIdRef.current;
+            if (convId && wsService) {
+                setTimeout(() => {
+                    wsService!.send({ type: 'set_conversation', conversationId: convId });
+                }, 500); // Delay para dar tiempo al WS de estabilizarse
+            }
+        });
+
         return () => {
             offOpen();
             offClose();
@@ -304,6 +333,7 @@ export function useWebSocket() {
             offCascadeStatus();
             offConvUpdated();
             offResources();
+            offStaleReconnect(); // V5: cleanup del stale reconnect listener
         };
     }, []);
 

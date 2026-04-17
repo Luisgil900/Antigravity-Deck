@@ -247,6 +247,17 @@ if (AUTH_KEY) {
 setupRoutes(app);
 setupWebSocket(wss);
 
+// Frontend Next.js Proxy — Route all non-API web traffic to Next.js on port FRONTEND_PORT
+const { createProxyMiddleware } = require('http-proxy-middleware');
+const TARGET_FE = process.env.FRONTEND_PORT ? `http://localhost:${process.env.FRONTEND_PORT}` : 'http://localhost:3000';
+app.use('/', createProxyMiddleware({
+  target: TARGET_FE,
+  changeOrigin: true,
+  // We don't proxy WebSockets via this middleware because our native 'upgrade' 
+  // event handler (server.on) safely catches them directly!
+  ws: false
+}));
+
 // Agent WebSocket — external AI agent protocol at /ws/agent
 const { setupAgentWebSocket } = require('./src/ws-agent');
 setupAgentWebSocket(agentWss);

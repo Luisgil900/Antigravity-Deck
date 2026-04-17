@@ -7,8 +7,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { MarkdownRenderer } from './markdown-renderer';
-import { User, Bot, Star, Copy, Check, Wrench, ArrowUp, ArrowDown, MessageSquare, ChevronRight } from 'lucide-react';
+import { User, Bot, Star, Copy, Check, Wrench, ArrowUp, ArrowDown, MessageSquare, ChevronRight, Layers } from 'lucide-react';
 import { StepIcon } from './ui/step-icon';
+import { ArtifactPreview } from './chat/agent-response';
 
 // === Classification ===
 function isUserInput(step: Step): boolean {
@@ -23,29 +24,49 @@ function isAgentResponse(step: Step): boolean {
     return false;
 }
 
+function getArtifactData(step: Step): { path: string; name?: string } | null {
+    // Antigravity encodes tool arguments in step.metadata.argumentsJson or step.codeAction
+    try {
+        const argsJson = step.metadata?.argumentsJson;
+        if (!argsJson) return null;
+        const args = JSON.parse(argsJson);
+        if (args.IsArtifact === true || args.ArtifactMetadata) {
+            return { 
+                path: args.TargetFile || '', 
+                name: args.ArtifactMetadata?.Summary?.split('\n')[0] || undefined 
+            };
+        }
+    } catch { /* ignore parse errors */ }
+    return null;
+}
+
 // === Grouping ===
 interface StepGroup {
-    type: 'user' | 'response' | 'processing';
-    steps: { step: Step; originalIndex: number }[];
+    type: 'user' | 'response' | 'processing' | 'artifacts';
+    steps: { step: Step; originalIndex: number; artifactData?: { path: string; name?: string } }[];
 }
 
 function groupSteps(steps: Step[]): StepGroup[] {
     const groups: StepGroup[] = [];
     let proc: { step: Step; originalIndex: number }[] = [];
+    let arts: { step: Step; originalIndex: number; artifactData: { path: string; name?: string } }[] = [];
 
-    const flush = () => {
-        if (proc.length > 0) {
-            groups.push({ type: 'processing', steps: [...proc] });
-            proc = [];
-        }
+    const flushProc = () => {
+        if (proc.length > 0) { groups.push({ type: 'processing', steps: [...proc] }); proc = []; }
     };
+    const flushArts = () => {
+        if (arts.length > 0) { groups.push({ type: 'artifacts', steps: [...arts] }); arts = []; }
+    };
+    const flushAll = () => { flushProc(); flushArts(); };
 
     steps.forEach((step, idx) => {
-        if (isUserInput(step)) { flush(); groups.push({ type: 'user', steps: [{ step, originalIndex: idx }] }); }
-        else if (isAgentResponse(step)) { flush(); groups.push({ type: 'response', steps: [{ step, originalIndex: idx }] }); }
-        else { proc.push({ step, originalIndex: idx }); }
+        const artData = getArtifactData(step);
+        if (isUserInput(step)) { flushAll(); groups.push({ type: 'user', steps: [{ step, originalIndex: idx }] }); }
+        else if (isAgentResponse(step)) { flushAll(); groups.push({ type: 'response', steps: [{ step, originalIndex: idx }] }); }
+        else if (artData && artData.path) { flushProc(); arts.push({ step, originalIndex: idx, artifactData: artData }); }
+        else { flushArts(); proc.push({ step, originalIndex: idx }); }
     });
-    flush();
+    flushAll();
     return groups;
 }
 
@@ -218,6 +239,58 @@ function ScrollControls({ containerRef, show }: { containerRef: React.RefObject<
     );
 }
 
+// === Artifact Group ===
+function ArtifactGroup({ steps: groupSteps, onStepClick, bookmarkedSteps }: {
+    steps: { step: Step; originalIndex: number; artifactData?: { path: string; name?: string } }[];
+    onStepClick?: (i: number) => void;
+    bookmarkedSteps?: Set<number>;
+}) {
+    const [expanded, setExpanded] = useState(false);
+    const hasBookmarks = groupSteps.some(({ originalIndex }) => bookmarkedSteps?.has(originalIndex));
+    const first = groupSteps[0].originalIndex + 1;
+    const last = groupSteps[groupSteps.length - 1].originalIndex + 1;
+
+    return (
+        <div className="mb-3 mx-1">
+            <button
+                onClick={() => setExpanded(!expanded)}
+                className={cn(
+                    'w-full flex items-center gap-2.5 px-4 py-2 rounded-lg text-xs transition-all duration-200',
+                    'bg-purple-950/20 hover:bg-purple-950/40 border border-purple-500/20 hover:border-purple-500/40',
+                    expanded && 'rounded-b-none'
+                )}
+            >
+                <span className={cn('transition-transform duration-200 text-purple-400', expanded && 'rotate-90')}><ChevronRight className="w-3 h-3" /></span>
+                <span className="text-purple-400"><Layers className="h-3 w-3" /></span>
+                <span className="font-semibold text-purple-300">
+                    {groupSteps.length} {groupSteps.length === 1 ? 'Artifact Context' : 'Artifact Contexts'}
+                </span>
+                <span className="text-[10px] text-purple-400/50 truncate flex-1 text-left font-mono">
+                    {groupSteps.map(g => g.artifactData?.name || g.artifactData?.path.split('/').pop()).join(' · ')}
+                </span>
+                {hasBookmarks && <span className="text-[10px]"><Star className="h-2.5 w-2.5 fill-yellow-500 text-yellow-500" /></span>}
+                <Badge variant="outline" className="text-[9px] font-mono text-purple-400/60 border-purple-500/30">#{first}{first !== last ? `–${last}` : ''}</Badge>
+            </button>
+
+            {expanded && (
+                <div className="border border-t-0 border-purple-500/20 rounded-b-lg bg-purple-950/10 py-1.5 px-3 space-y-1.5 animate-in slide-in-from-top-1 duration-150">
+                    {groupSteps.map(({ step, originalIndex, artifactData }) => {
+                        if (!artifactData) return null;
+                        return (
+                            <div key={originalIndex} className="relative group/art pb-1">
+                                <ArtifactPreview uri={'file:///' + artifactData.path} displayName={artifactData.name} />
+                                <div className="absolute right-0 top-0 opacity-0 group-hover/art:opacity-100 transition-opacity">
+                                    <Badge variant="outline" className="text-[8px] font-mono opacity-50 cursor-pointer hover:bg-muted" onClick={() => onStepClick?.(originalIndex)}>#{originalIndex + 1}</Badge>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // === Chat Area ===
 export function ChatArea({ steps, searchQuery, activeFilters, onStepClick, bookmarkedSteps, baseIndex, loadingOlder, onLoadOlder }: {
     steps: Step[]; searchQuery: string; activeFilters: Set<string>;
@@ -333,6 +406,9 @@ export function ChatArea({ steps, searchQuery, activeFilters, onStepClick, bookm
                         if (group.type === 'response') {
                             const { step, originalIndex } = group.steps[0];
                             return <AgentResponse key={`r-${gIdx}`} step={step} index={originalIndex} searchQuery={searchQuery} onStepClick={onStepClick} isBookmarked={bookmarkedSteps?.has(originalIndex)} />;
+                        }
+                        if (group.type === 'artifacts') {
+                            return <ArtifactGroup key={`a-${gIdx}`} steps={group.steps} onStepClick={onStepClick} bookmarkedSteps={bookmarkedSteps} />;
                         }
                         return <ProcessingGroup key={`p-${gIdx}`} steps={group.steps} searchQuery={searchQuery} onStepClick={onStepClick} bookmarkedSteps={bookmarkedSteps} />;
                     })}

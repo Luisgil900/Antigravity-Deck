@@ -179,7 +179,7 @@ async function runLocal() {
     log('*', `Starting backend on port ${BE_PORT}...`);
     const be = startProcess('BE', 'node', ['server.js'], {
         cwd: __dirname,
-        env: { ...process.env, PORT: String(BE_PORT), NODE_ENV: 'production' }
+        env: { ...process.env, PORT: String(BE_PORT), FRONTEND_PORT: String(FE_PORT), NODE_ENV: 'production', ALLOW_LOCALHOST_BYPASS: 'true' }
     });
     await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -231,7 +231,7 @@ async function runTunnel() {
     log('*', `Starting backend on port ${BE_PORT}...`);
     const be = startProcess('BE', 'node', ['server.js'], {
         cwd: __dirname,
-        env: { ...process.env, PORT: String(BE_PORT), AUTH_KEY: authKey, QUIET_POLL: '1', NODE_ENV: 'production' }
+        env: { ...process.env, PORT: String(BE_PORT), AUTH_KEY: authKey, QUIET_POLL: '1', NODE_ENV: 'production', ALLOW_LOCALHOST_BYPASS: 'true' }
     });
     await new Promise(resolve => setTimeout(resolve, 3000));
 
