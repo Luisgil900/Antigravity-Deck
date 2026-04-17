@@ -716,6 +716,7 @@ export default function Home() {
               <TradingDashboard
                 onOpenChat={(chatId) => {
                   if (activeWorkspace) {
+                    setShowDashboard(false);
                     resetPanels();
                     selectConversation(chatId);
                   }
