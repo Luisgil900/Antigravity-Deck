@@ -155,11 +155,12 @@ module.exports = function (app) {
                 // Try to get live status from the poller's known summaries (updated every few seconds)
                 const poller = require('../poller');
                 const summary = poller._knownConvSummaries?.get(chatId);
+                const liveStepCount = poller._lastCascadeStepCountMap?.[chatId];
                 
                 if (summary) {
                     info.exists = true;
-                    // summary obj structure from Language Server
-                    info.stepCount = summary.totalStepCount || 0;
+                    // Provide accurately tracked live step count, bypassing the summary object which lacks it
+                    info.stepCount = liveStepCount !== undefined ? liveStepCount : (summary.totalStepCount || 0);
                     info.lastUpdate = new Date().toISOString(); // It's live!
                     if (summary.trajectoryMetadata?.title) {
                         info.title = summary.trajectoryMetadata.title;

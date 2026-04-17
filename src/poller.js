@@ -18,6 +18,7 @@ const { handleAutoAccept, startAutoAcceptPolling } = require('./auto-accept');
 let pollTimer = null;
 let currentInterval = POLL_INTERVAL;
 const lastCascadeStatusMap = {}; // per-conversation status tracking
+const lastCascadeStepCountMap = {}; // per-conversation step tracking
 let isPollRunning = false; // prevent concurrent poll ticks
 let pollTickCount = 0; // V7: counter for periodic meta broadcasts
 const knownConvIds = new Set(); // track all discovered conversation IDs
@@ -94,6 +95,7 @@ async function pollNow() {
                     cascadeInstanceMap.set(cascadeId, inst);
 
                     if (!existing || isRunning) {
+                        lastCascadeStepCountMap[cascadeId] = info.stepCount || 0;
                         convToPoll.set(cascadeId, {
                             status,
                             trajectoryId: info.trajectoryId,
@@ -581,6 +583,9 @@ module.exports = {
     _knownConvIds: knownConvIds,
     _knownConvSummaries: knownConvSummaries,
     _lastCascadeStatusMap: lastCascadeStatusMap,
+    _lastCascadeStepCountMap: lastCascadeStepCountMap,
     _cascadeInstanceMap: cascadeInstanceMap,
 };
+
+
 

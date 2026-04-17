@@ -715,11 +715,13 @@ export default function Home() {
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               <TradingDashboard
                 onOpenChat={(chatId) => {
-                  if (activeWorkspace) {
-                    setShowDashboard(false);
-                    resetPanels();
-                    selectConversation(chatId);
+                  if (!activeWorkspace) {
+                     // Set a default to prevent ChatView from loading without a workspace
+                     setActiveWorkspace('ANTIGRAVITY');
                   }
+                  setShowDashboard(false);
+                  resetPanels();
+                  selectConversation(chatId);
                 }}
               />
             </div>
