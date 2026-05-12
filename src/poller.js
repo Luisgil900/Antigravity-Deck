@@ -95,12 +95,21 @@ async function pollNow() {
                     cascadeInstanceMap.set(cascadeId, inst);
 
                     if (!existing || isRunning) {
-                        lastCascadeStepCountMap[cascadeId] = info.stepCount || 0;
+                        // Only update step count from Engine if stepCache doesn't have a HIGHER value
+                        // stepCache is updated in real-time; Engine data can lag behind
+                        const { stepCache: _sc } = require('./step-cache');
+                        const cacheEntry = _sc[cascadeId];
+                        const cacheStepCount = cacheEntry ? (cacheEntry.baseIndex || 0) + cacheEntry.steps.length : 0;
+                        const engineStepCount = info.stepCount || 0;
+                        lastCascadeStepCountMap[cascadeId] = Math.max(cacheStepCount, engineStepCount);
                         convToPoll.set(cascadeId, {
                             status,
                             trajectoryId: info.trajectoryId,
-                            stepCount: info.stepCount || 0,
+                            stepCount: Math.max(cacheStepCount, engineStepCount),
                             summary: info.summary || '',
+                            lastModifiedTime: (cacheEntry?.lastUpdateTime && cacheStepCount > engineStepCount)
+                                ? cacheEntry.lastUpdateTime
+                                : (info.lastModifiedTime || ''),
                             inst,
                         });
                     }
@@ -115,14 +124,18 @@ async function pollNow() {
         let hasNewConversations = false;
         for (const cascadeId of convToPoll.keys()) {
             const info = convToPoll.get(cascadeId);
+            
+            // Generate a signature for the conversation: title + step count + last modified
+            const currentSignature = `${info.summary}|${info.stepCount}|${info.lastModifiedTime || ''}`;
+            
             if (!knownConvIds.has(cascadeId)) {
                 knownConvIds.add(cascadeId);
-                knownConvSummaries.set(cascadeId, info.summary);
+                knownConvSummaries.set(cascadeId, currentSignature);
                 hasNewConversations = true;
             } else {
-                // If title was modified externally, trigger UI update
-                if (knownConvSummaries.get(cascadeId) !== info.summary) {
-                    knownConvSummaries.set(cascadeId, info.summary);
+                // If title, step count, or modified time changed remotely (like bot injection), trigger UI update
+                if (knownConvSummaries.get(cascadeId) !== currentSignature) {
+                    knownConvSummaries.set(cascadeId, currentSignature);
                     hasNewConversations = true;
                 }
             }
@@ -138,10 +151,14 @@ async function pollNow() {
         if (pollTickCount % 6 === 0) {
             // Emit lightweight meta update with step counts for badge updates
             const metaEntries = [];
+            const { stepCache: _scMeta } = require('./step-cache');
             for (const [cid, info] of convToPoll) {
+                // Use stepCache for accurate real-time step counts
+                const cMeta = _scMeta[cid];
+                const realSteps = cMeta ? (cMeta.baseIndex || 0) + cMeta.steps.length : (info.stepCount || 0);
                 metaEntries.push({
                     conversationId: cid,
-                    stepCount: info.stepCount || 0,
+                    stepCount: realSteps,
                     status: info.status || '',
                     summary: info.summary || '',
                 });
@@ -191,9 +208,32 @@ async function pollNow() {
                     info.status !== 'CASCADE_RUN_STATUS_WAITING_FOR_USER';
                 if (wasActive && isNowDone) {
                     triggerBridgeRelay(cascadeId);
-                    // Notify frontend to refresh conversation list (summary/title may have changed)
+
+                    // Preserve step metadata BEFORE marking for refresh.
+                    // The cache step CONTENT may need refresh (LS finalizes after completion)
+                    // but the step COUNT and TIMESTAMP must survive — they are the source of truth
+                    // for the sidebar, dashboard, and conversation list endpoints.
+                    const cachedEntry = stepCache[cascadeId];
+                    if (cachedEntry) {
+                        const preservedCount = (cachedEntry.baseIndex || 0) + cachedEntry.steps.length;
+                        const preservedTime = cachedEntry.lastUpdateTime || new Date().toISOString();
+                        // Mark for content refresh (step text may change after finalization)
+                        // but KEEP the cache entry alive with accurate metadata
+                        cachedEntry._needsContentRefresh = true;
+                        cachedEntry.lastUpdateTime = preservedTime;
+                        // Ensure step count map stays accurate (never regress)
+                        lastCascadeStepCountMap[cascadeId] = Math.max(
+                            lastCascadeStepCountMap[cascadeId] || 0,
+                            preservedCount
+                        );
+                        console.log(`[post-done] ${cascadeId.substring(0, 8)} marked for refresh (steps: ${preservedCount})`);
+                    } else {
+                        console.log(`[post-done] ${cascadeId.substring(0, 8)} no cache to preserve`);
+                    }
+
+                    // Notify frontend AFTER metadata is preserved
                     _broadcastAll({ type: 'conversations_updated' });
-                    // Removed cache deletion here to ensure UI stays synced during consecutive messages!
+                    continue;
                 }
 
                 // Fast-cascade relay: first time seeing this cascade and it's already IDLE/DONE
@@ -224,10 +264,25 @@ async function pollNow() {
             if (cached && serverAhead) {
                 const gap = info.stepCount - cachedEnd;
                 if (gap > 50) {
-                    console.log(`[poll] ${cascadeId.substring(0, 8)}: Large gap detected (cache=${cachedEnd}, server=${info.stepCount}, gap=${gap}). Invalidating cache.`);
+                    // Preserve metadata before rebuild
+                    const preservedCount = cachedEnd;
+                    const preservedTime = cached.lastUpdateTime;
+                    console.log(`[poll] ${cascadeId.substring(0, 8)}: Large gap detected (cache=${cachedEnd}, server=${info.stepCount}, gap=${gap}). Rebuilding cache.`);
                     delete stepCache[cascadeId];
                     await ensureCached(cascadeId, info.inst);
-                    continue; // Skip normal poll, cache was just rebuilt
+                    // Restore metadata as floor if ensureCached got stale data
+                    const rebuilt = stepCache[cascadeId];
+                    if (rebuilt) {
+                        const rebuiltCount = (rebuilt.baseIndex || 0) + rebuilt.steps.length;
+                        if (rebuiltCount < preservedCount) {
+                            // Engine returned stale data — keep our higher count
+                            lastCascadeStepCountMap[cascadeId] = preservedCount;
+                        }
+                        if (preservedTime && !rebuilt.lastUpdateTime) {
+                            rebuilt.lastUpdateTime = preservedTime;
+                        }
+                    }
+                    continue;
                 }
             }
 
@@ -395,6 +450,11 @@ async function pollConversation(activeConvId, info) {
         // Broadcast new steps
         if (newStepsToAdd.length > 0) {
             cache.steps.push(...newStepsToAdd);
+            cache.lastUpdateTime = new Date().toISOString(); // <-- Mantiene fresco el timestamp para rutas listar
+
+            const actualTotal = (cache.baseIndex || 0) + cache.steps.length;
+            lastCascadeStepCountMap[activeConvId] = actualTotal;
+
             // Trim window to keep memory bounded
             if (cache.steps.length > STEP_WINDOW_SIZE) {
                 const excess = cache.steps.length - STEP_WINDOW_SIZE;
@@ -411,7 +471,9 @@ async function pollConversation(activeConvId, info) {
             console.log(`[WS] broadcast steps_new: ${newStepsToAdd.length} steps for ${activeConvId.substring(0, 8)} (total: ${cache.steps.length})`);
         }
 
-        cache.stepCount = newStepCount;
+        // Protect stepCount from regression — never let Engine's stale count overwrite a higher real count
+        const actualCachedTotal = (cache.baseIndex || 0) + cache.steps.length;
+        cache.stepCount = Math.max(actualCachedTotal, newStepCount);
 
         if (updatedCount > 0 || newCount > 0) {
             if (!quietPoll) console.log(`[poll] ${updatedCount} updated, ${newCount} new (${cache.steps.length}/${newStepCount})`);
@@ -578,6 +640,8 @@ module.exports = {
     _lastCascadeStepCountMap: lastCascadeStepCountMap,
     _cascadeInstanceMap: cascadeInstanceMap,
 };
+
+
 
 
 

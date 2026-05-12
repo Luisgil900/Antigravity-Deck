@@ -1,16 +1,18 @@
-// === Bot Status API ===
-// Serves the bot's real-time status, trade history, logs, and chat info for the Trading Dashboard.
+// === Bot Status API — V8 Infinity ===
+// Serves the bot's real-time status, trade history, logs, heartbeat and chat info.
 
 const fs = require('fs');
 const path = require('path');
 
-// Resolve the quant_agent data directory — look for it relative to the repo root
+// V8: In-memory heartbeat store (latest from bot)
+let _lastHeartbeat = null;
+
+// Resolve files relative to repo root — NO absolute paths
 function findBotStatusFile() {
     const candidates = [
         path.join(process.cwd(), '..', 'quant_agent', 'data_dump', 'bot_status.json'),
         path.join(process.cwd(), 'quant_agent', 'data_dump', 'bot_status.json'),
         path.resolve(__dirname, '..', '..', 'quant_agent', 'data_dump', 'bot_status.json'),
-        'C:\\Users\\luisg\\Music\\ANTIGRAVITY\\quant_agent\\data_dump\\bot_status.json',
     ];
     for (const p of candidates) {
         if (fs.existsSync(p)) return p;
@@ -23,7 +25,6 @@ function findTradeHistoryFile() {
         path.join(process.cwd(), '..', 'quant_agent', 'data_dump', 'trade_history.jsonl'),
         path.join(process.cwd(), 'quant_agent', 'data_dump', 'trade_history.jsonl'),
         path.resolve(__dirname, '..', '..', 'quant_agent', 'data_dump', 'trade_history.jsonl'),
-        'C:\\Users\\luisg\\Music\\ANTIGRAVITY\\quant_agent\\data_dump\\trade_history.jsonl',
     ];
     for (const p of candidates) {
         if (fs.existsSync(p)) return p;
@@ -36,7 +37,6 @@ function findLogFile() {
         path.join(process.cwd(), '..', 'quant_agent', 'logs', 'centinela.log'),
         path.join(process.cwd(), 'quant_agent', 'logs', 'centinela.log'),
         path.resolve(__dirname, '..', '..', 'quant_agent', 'logs', 'centinela.log'),
-        'C:\\Users\\luisg\\Music\\ANTIGRAVITY\\quant_agent\\logs\\centinela.log',
     ];
     for (const p of candidates) {
         if (fs.existsSync(p)) return p;
@@ -61,6 +61,8 @@ module.exports = function (app) {
                     rankings: { best: [], worst: [] },
                     bot_chats: {},
                     memory: {},
+                    v8: {},
+                    heartbeat: null,
                 });
             }
             
@@ -70,14 +72,36 @@ module.exports = function (app) {
             // Add staleness indicator (if last update > 60s ago)
             const lastUpdate = new Date(status.timestamp);
             const ageSeconds = (Date.now() - lastUpdate.getTime()) / 1000;
-            status._stale = ageSeconds > 120;
+            status._stale = ageSeconds > 300;  // V8-INF: 300s (ciclo bot ~210s)
             status._age_seconds = Math.round(ageSeconds);
+            
+            // V8: Inject latest heartbeat data
+            status.heartbeat = _lastHeartbeat;
             
             res.json(status);
         } catch (err) {
             console.error('[bot-status] Error reading status:', err.message);
             res.status(500).json({ error: 'Failed to read bot status' });
         }
+    });
+    
+    // POST /api/bot-heartbeat — V8: Receive heartbeat from bot
+    app.post('/api/bot-heartbeat', (req, res) => {
+        try {
+            _lastHeartbeat = {
+                ...req.body,
+                received_at: new Date().toISOString(),
+            };
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[bot-heartbeat] Error:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+    
+    // GET /api/bot-heartbeat — V8: Get latest heartbeat
+    app.get('/api/bot-heartbeat', (req, res) => {
+        res.json(_lastHeartbeat || { status: 'no_heartbeat_yet' });
     });
     
     // GET /api/bot-trades — Full trade history
@@ -152,19 +176,36 @@ module.exports = function (app) {
             };
 
             try {
-                // Try to get live status from the poller's known summaries (updated every few seconds)
+                // Try to get live status from the poller's known summaries and step cache
                 const poller = require('../poller');
-                const summary = poller._knownConvSummaries?.get(chatId);
+                const { stepCache } = require('../step-cache');
+                const signature = poller._knownConvSummaries?.get(chatId);
                 const liveStepCount = poller._lastCascadeStepCountMap?.[chatId];
+                const cache = stepCache[chatId];
                 
-                if (summary) {
+                if (signature || cache) {
                     info.exists = true;
-                    // Provide accurately tracked live step count, bypassing the summary object which lacks it
-                    info.stepCount = liveStepCount !== undefined ? liveStepCount : (summary.totalStepCount || 0);
-                    info.lastUpdate = new Date().toISOString(); // It's live!
-                    if (summary.trajectoryMetadata?.title) {
-                        info.title = summary.trajectoryMetadata.title;
+                    
+                    // Priority 1: stepCache (most accurate — real-time)
+                    if (cache) {
+                        info.stepCount = (cache.baseIndex || 0) + cache.steps.length;
+                        info.lastUpdate = cache.lastUpdateTime || new Date().toISOString();
                     }
+                    // Priority 2: poller's live step count map
+                    else if (liveStepCount !== undefined) {
+                        info.stepCount = liveStepCount;
+                        info.lastUpdate = new Date().toISOString();
+                    }
+                    
+                    // Parse the pipe-delimited signature: "title|stepCount|lastModifiedTime"
+                    if (signature && typeof signature === 'string') {
+                        const parts = signature.split('|');
+                        if (parts[0]) info.title = parts[0];
+                        // Use signature stepCount only if we have nothing better
+                        if (!info.stepCount && parts[1]) info.stepCount = parseInt(parts[1]) || 0;
+                        if (!info.lastUpdate && parts[2]) info.lastUpdate = parts[2];
+                    }
+                    
                     return res.json(info);
                 }
             } catch (err) {

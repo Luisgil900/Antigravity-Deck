@@ -93,6 +93,11 @@ function killStaleProcesses(ports) {
 // Build frontend (production)
 function buildFrontend(extraEnv = {}) {
     const buildEnv = { ...process.env, BACKEND_PORT: String(BE_PORT), ...extraEnv };
+    // Clean stale lock file to prevent "Unable to acquire lock" errors
+    const lockFile = path.join(__dirname, 'frontend', '.next', 'lock');
+    if (fs.existsSync(lockFile)) {
+        try { fs.unlinkSync(lockFile); log('*', '🔓 Stale .next/lock removed'); } catch {}
+    }
     progress('Building frontend...');
     log('*', 'Building frontend (production)...');
     try {

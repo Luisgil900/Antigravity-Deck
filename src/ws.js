@@ -35,12 +35,17 @@ function setupWebSocket(wss, { ensureCached, stepCache }) {
                     console.log(`[WS] set_conversation → ${msg.conversationId?.substring(0, 8)}, clients: ${clientConvMap.size}`);
                     await ensureCached(msg.conversationId, getInstanceForCascade(msg.conversationId));
                     const cache = stepCache[msg.conversationId];
+                    // Use the higher of actual cached steps vs stored stepCount to prevent regression
+                    const actualTotal = cache ? Math.max(
+                        cache.stepCount || 0,
+                        (cache.baseIndex || 0) + cache.steps.length
+                    ) : 0;
                     sendToOne(ws, {
                         type: 'steps_init',
                         conversationId: msg.conversationId,
                         steps: cache ? cache.steps : [],
                         baseIndex: cache ? (cache.baseIndex || 0) : 0,
-                        stepCount: cache ? (cache.stepCount || 0) : 0,
+                        stepCount: actualTotal,
                     });
                 } else if (msg.type === 'subscribe_all') {
                     // Live Logs mode: receive all broadcasts regardless of conversation

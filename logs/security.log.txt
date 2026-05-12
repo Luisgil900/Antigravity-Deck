@@ -5,3 +5,12 @@ C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260412-0000-01-security
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260413-0000-01-security.log.gz
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260414-0000-01-security.log.gz
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260416-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260417-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260419-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260420-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260424-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260427-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260501-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260502-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260503-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260505-0000-01-security.log.gz

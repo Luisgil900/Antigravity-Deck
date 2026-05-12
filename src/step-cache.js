@@ -124,7 +124,9 @@ async function fetchAllSteps(convId, totalSteps, inst = null, fromIndex = 0) {
 // --- Ensure cached ---
 
 async function ensureCached(convId, inst = null) {
-    if (stepCache[convId]) return;
+    const existing = stepCache[convId];
+    // Already cached and content is clean — skip
+    if (existing && !existing._needsContentRefresh) return;
     if (fetchingSet.has(convId)) return; // per-conversation lock
     if (lsInstances.length === 0) {
         console.log(`[!] ensureCached skipped — LS not configured yet`);
@@ -132,19 +134,46 @@ async function ensureCached(convId, inst = null) {
     }
     fetchingSet.add(convId);
 
+    // Preserve metadata from existing cache as "floor" values
+    const preservedStepCount = existing ? (existing.baseIndex || 0) + existing.steps.length : 0;
+    const preservedTime = existing?.lastUpdateTime || null;
+    const isRefresh = !!existing?._needsContentRefresh;
+
     try {
         const callFn = inst ? (m, b) => callApi(m, b, inst) : null;
         const stepCount = await getStepCountAndStatus(convId, callFn).then(r => r.stepCount);
-        console.log(`[*] Loading ${convId.substring(0, 8)} (stepCount: ${stepCount}, batches: ${Math.ceil(stepCount / BATCH_SIZE)})...`);
+        // Use the higher of Engine count vs preserved count (Engine can lag)
+        const effectiveStepCount = Math.max(stepCount, preservedStepCount);
+        console.log(`[*] ${isRefresh ? 'Refreshing' : 'Loading'} ${convId.substring(0, 8)} (engine: ${stepCount}, preserved: ${preservedStepCount}, effective: ${effectiveStepCount})...`);
 
         // Only fetch the tail window (last STEP_WINDOW_SIZE steps)
-        const baseIndex = Math.max(0, stepCount - STEP_WINDOW_SIZE);
-        const { steps, hasGaps } = await fetchAllSteps(convId, stepCount, inst, baseIndex);
-        stepCache[convId] = { steps, stepCount, baseIndex };
-        console.log(`[✓] Cached ${steps.length}/${stepCount} steps (window from ${baseIndex})${hasGaps ? ' (with gaps)' : ''}`);
+        const baseIndex = Math.max(0, effectiveStepCount - STEP_WINDOW_SIZE);
+        const { steps, hasGaps } = await fetchAllSteps(convId, effectiveStepCount, inst, baseIndex);
+        
+        const newEntry = { 
+            steps, 
+            stepCount: effectiveStepCount, 
+            baseIndex, 
+            lastUpdateTime: preservedTime || new Date().toISOString() 
+        };
+        
+        // Final check: never let the new cache have fewer apparent steps than the old one
+        const newTotal = (newEntry.baseIndex || 0) + newEntry.steps.length;
+        if (newTotal < preservedStepCount && preservedStepCount > 0) {
+            // Engine returned fewer steps — keep the higher stepCount for metadata queries
+            newEntry.stepCount = preservedStepCount;
+            console.log(`[!] Engine returned ${newTotal} steps but preserved count is ${preservedStepCount} — keeping higher count`);
+        }
+        
+        stepCache[convId] = newEntry;
+        console.log(`[✓] Cached ${steps.length}/${effectiveStepCount} steps (window from ${baseIndex})${hasGaps ? ' (with gaps)' : ''}`);
     } catch (e) {
         console.log(`[!] Load error: ${e.message}`);
-        // Don't cache empty on error — will retry on next set_conversation
+        // On error during refresh, keep existing cache intact (don't delete it)
+        if (existing && isRefresh) {
+            delete existing._needsContentRefresh; // Clear the flag so we don't retry indefinitely
+            console.log(`[!] Refresh failed — keeping existing cache with ${preservedStepCount} steps`);
+        }
     } finally {
         fetchingSet.delete(convId);
     }

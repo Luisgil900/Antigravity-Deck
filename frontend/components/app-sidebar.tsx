@@ -43,11 +43,12 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable, Workflow, BarChart3 } from "lucide-react"
+import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable, Workflow, BarChart3, LockKeyhole, LockKeyholeOpen } from "lucide-react"
 
 import { WorkspaceGroup } from "./sidebar/workspace-group"
 import type { ConvSummary, WorkspaceData } from "./sidebar/workspace-group"
 import { SystemResourceSummary } from "./sidebar/system-resource-summary"
+import { useOrientationLock } from "@/hooks/use-orientation-lock"
 
 interface AppSidebarProps {
     currentConvId: string | null
@@ -98,6 +99,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
     const { isDark, toggle: toggleTheme } = useTheme()
     const { isMobile } = useSidebar()
+    const orientationLock = useOrientationLock()
 
     const [wsData, setWsData] = useState<WorkspaceData[]>([])
     const [folders, setFolders] = useState<WorkspaceFolder[]>([])
@@ -525,6 +527,25 @@ export function AppSidebar({
                 </SidebarContent>
 
                 <SidebarFooter>
+                    {/* Orientation Lock — only in PWA */}
+                    {orientationLock.supported && (
+                        <div className="px-3 pb-1">
+                            <button
+                                onClick={orientationLock.toggleLock}
+                                className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                                    orientationLock.isLocked
+                                        ? 'bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/15'
+                                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/15'
+                                }`}
+                            >
+                                {orientationLock.isLocked ? <LockKeyhole className="w-3.5 h-3.5" /> : <LockKeyholeOpen className="w-3.5 h-3.5" />}
+                                <span>{orientationLock.isLocked ? 'Rotation Locked' : 'Rotation Free'}</span>
+                                <span className="ml-auto text-[10px] opacity-60">
+                                    {orientationLock.isPortrait ? 'Portrait' : 'Landscape'}
+                                </span>
+                            </button>
+                        </div>
+                    )}
                     <SidebarMenu>
                         <SidebarMenuItem>
                             <DropdownMenu>

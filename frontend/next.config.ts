@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 // Backend port: 3500 for local (dev/prod), 9807 when launched by start-tunnel.js
 const BE_PORT = process.env.BACKEND_PORT || '3500';
@@ -8,6 +9,12 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // devIndicators: false — enabled in dev so devs know it's not production
+
+  // Silence "multiple lockfiles" warnings — tell Next.js the frontend dir is the root
+  outputFileTracingRoot: path.resolve(__dirname),
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
 
   // Allow long-running backend responses (e.g. workspace create waits up to 30s for LS detection)
   experimental: {

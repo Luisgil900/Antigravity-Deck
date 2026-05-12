@@ -21,7 +21,11 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
+import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star, FileText, Loader2, Volume2, Pause } from 'lucide-react';
+import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { MarkdownRenderer } from './markdown-renderer';
+import { useAndroidSafeTTS } from './chat/agent-response';
 import { Switch } from '@/components/ui/switch';
 import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 
@@ -112,6 +116,24 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
     const [showWorkflows, setShowWorkflows] = useState(false);
     const [workflowQuery, setWorkflowQuery] = useState('');
+    const [showArtifacts, setShowArtifacts] = useState(false);
+
+    // === Load artifacts from disk via API (not from step cache) ===
+    const [conversationArtifacts, setConversationArtifacts] = useState<{ path: string; name: string; summary: string; type: string; updatedAt: string }[]>([]);
+    useEffect(() => {
+        const convId = activeCascadeId;
+        if (!convId) { setConversationArtifacts([]); return; }
+        const loadArtifacts = () => {
+            fetch(`${API_BASE}/api/artifacts/${convId}`, { headers: authHeaders() })
+                .then(r => r.ok ? r.json() : { artifacts: [] })
+                .then(d => setConversationArtifacts(d.artifacts || []))
+                .catch(() => setConversationArtifacts([]));
+        };
+        loadArtifacts();
+        // Refresh when steps change (new artifacts may have been created)
+        const interval = setInterval(loadArtifacts, 30000); // Refresh every 30s
+        return () => clearInterval(interval);
+    }, [activeCascadeId, steps.length]);
 
     // === Notification quick toggle ===
     const [notificationsEnabled, setNotificationsEnabled] = useState(() => notificationService?.getSettings().enabled ?? false);
@@ -737,6 +759,13 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                             <BarChart2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
                                             {showTokens ? 'Hide Tokens' : 'Show Tokens'}
                                         </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => setShowArtifacts(true)} className="cursor-pointer">
+                                            <FileText className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+                                            Artifacts
+                                            {conversationArtifacts.length > 0 && (
+                                                <Badge variant="secondary" className="ml-auto text-[9px] h-4 px-1.5">{conversationArtifacts.length}</Badge>
+                                            )}
+                                        </DropdownMenuItem>
                                         <DropdownMenuSeparator className="bg-white/5" />
                                         <DropdownMenuItem onClick={onToggleAnalytics} className="cursor-pointer">
                                             <BarChart2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
@@ -875,6 +904,183 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                         </div>
                     </div>
                 </>
+            )}
+
+            {/* Artifacts Panel */}
+            {showArtifacts && (
+                <ArtifactsPanel
+                    artifacts={conversationArtifacts}
+                    onClose={() => setShowArtifacts(false)}
+                />
+            )}
+        </div>
+    );
+}
+
+// === Artifacts Panel (fullscreen modal - reads from disk via API) ===
+const ARTIFACT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+    'ARTIFACT_TYPE_IMPLEMENTATION_PLAN': { label: 'Plan', color: 'text-violet-400 bg-violet-500/15 border-violet-500/30' },
+    'ARTIFACT_TYPE_WALKTHROUGH': { label: 'Walkthrough', color: 'text-sky-400 bg-sky-500/15 border-sky-500/30' },
+    'ARTIFACT_TYPE_TASK': { label: 'Task', color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30' },
+    'ARTIFACT_TYPE_OTHER': { label: 'Doc', color: 'text-amber-400 bg-amber-500/15 border-amber-500/30' },
+};
+
+function ArtifactsPanel({ artifacts, onClose }: { artifacts: { path: string; name: string; summary: string; type: string; updatedAt: string }[]; onClose: () => void }) {
+    const [selectedIdx, setSelectedIdx] = useState(0);
+    const [content, setContent] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [showList, setShowList] = useState(true); // Mobile: toggle between list and content
+    const loadedPathRef = useRef('');
+
+    const { ttsState, isTTSAvailable, handleTTS } = useAndroidSafeTTS(content);
+
+    // Load selected artifact content
+    useEffect(() => {
+        if (artifacts.length === 0) return;
+        const art = artifacts[selectedIdx];
+        if (!art || loadedPathRef.current === art.path) return;
+        loadedPathRef.current = art.path;
+        setLoading(true);
+        setError(null);
+        setContent(null);
+        fetch(`${API_BASE}/api/file/read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders() },
+            body: JSON.stringify({ path: art.path }),
+        })
+            .then(r => r.json())
+            .then(d => {
+                if (d.content) setContent(d.content);
+                else setError('Could not load file');
+            })
+            .catch(e => setError(e.message))
+            .finally(() => setLoading(false));
+    }, [selectedIdx, artifacts]);
+
+    const handleSelect = (idx: number) => {
+        loadedPathRef.current = '';
+        setSelectedIdx(idx);
+        setShowList(false); // On mobile, switch to content view after selecting
+    };
+
+    const relativeTime = (iso: string) => {
+        const diff = Date.now() - new Date(iso).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        return `${Math.floor(hrs / 24)}d ago`;
+    };
+
+    const currentArt = artifacts[selectedIdx];
+
+    return (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-md">
+            {/* Header */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border/30 shrink-0">
+                {/* Mobile back button (when viewing content) */}
+                {!showList && artifacts.length > 0 && (
+                    <button
+                        onClick={() => setShowList(true)}
+                        className="sm:hidden p-1 rounded-lg hover:bg-muted/40 text-muted-foreground"
+                    >
+                        ←
+                    </button>
+                )}
+                <FileText className="h-4 w-4 text-purple-400 shrink-0" />
+                <h2 className="text-sm font-semibold text-foreground/90 flex-1 min-w-0 truncate">
+                    {!showList && currentArt ? currentArt.name : `Artifacts (${artifacts.length})`}
+                </h2>
+                {isTTSAvailable && content && !showList && (
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleTTS}>
+                        {ttsState === 'playing' ? <Pause className="h-3.5 w-3.5 mr-1" /> : <Volume2 className="h-3.5 w-3.5 mr-1" />}
+                        {ttsState === 'playing' ? 'Pause' : ttsState === 'paused' ? 'Resume' : 'Read'}
+                    </Button>
+                )}
+                <button
+                    onClick={onClose}
+                    className="p-1.5 rounded-lg hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-all"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+            </div>
+
+            {artifacts.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center py-16">
+                        <FileText className="h-10 w-10 text-muted-foreground/15 mx-auto mb-3" />
+                        <p className="text-sm text-muted-foreground/50">No artifacts in this conversation</p>
+                        <p className="text-xs text-muted-foreground/30 mt-1">Artifacts appear here when created during the conversation</p>
+                    </div>
+                </div>
+            ) : (
+                <div className="flex-1 flex min-h-0">
+                    {/* Artifact list (sidebar on desktop, full on mobile when showList=true) */}
+                    <div className={cn(
+                        'border-r border-border/20 overflow-y-auto',
+                        showList ? 'flex-1 sm:flex-none sm:w-64' : 'hidden sm:block sm:w-64'
+                    )}>
+                        <div className="p-2 space-y-1">
+                            {artifacts.map((art, idx) => {
+                                const typeInfo = ARTIFACT_TYPE_LABELS[art.type] || ARTIFACT_TYPE_LABELS['ARTIFACT_TYPE_OTHER'];
+                                return (
+                                    <button
+                                        key={art.path}
+                                        onClick={() => handleSelect(idx)}
+                                        className={cn(
+                                            'w-full text-left p-3 rounded-lg transition-all',
+                                            idx === selectedIdx
+                                                ? 'bg-purple-500/10 border border-purple-500/25'
+                                                : 'hover:bg-muted/30 border border-transparent'
+                                        )}
+                                    >
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <FileText className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                                            <span className="text-xs font-medium text-foreground/90 truncate flex-1">{art.name}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 pl-5.5">
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${typeInfo.color}`}>
+                                                {typeInfo.label}
+                                            </span>
+                                            <span className="text-[10px] text-muted-foreground/40">{relativeTime(art.updatedAt)}</span>
+                                        </div>
+                                        {art.summary && (
+                                            <p className="text-[10px] text-muted-foreground/50 mt-1.5 pl-5.5 line-clamp-2 leading-relaxed">{art.summary.slice(0, 120)}</p>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Content area */}
+                    <div className={cn(
+                        'flex-1 overflow-y-auto',
+                        showList ? 'hidden sm:block' : 'block'
+                    )}>
+                        <div className="max-w-3xl mx-auto p-4 sm:p-6">
+                            {loading && (
+                                <div className="flex items-center justify-center py-16 text-muted-foreground/40">
+                                    <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                                    <span className="text-sm">Loading artifact…</span>
+                                </div>
+                            )}
+                            {error && (
+                                <div className="text-center py-16">
+                                    <p className="text-sm text-amber-400">{error}</p>
+                                    <p className="text-xs text-muted-foreground/50 mt-1">{currentArt?.path}</p>
+                                </div>
+                            )}
+                            {content && (
+                                <div className="text-sm leading-relaxed">
+                                    <MarkdownRenderer content={content} />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

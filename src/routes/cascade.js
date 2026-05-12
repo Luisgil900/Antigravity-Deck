@@ -4,8 +4,9 @@
 const { callApi, callApiFireAndForgetOnInstance } = require('../api');
 const { getAutoAccept, setAutoAccept, buildAcceptPayload } = require('../cache');
 const { startCascade, sendMessage } = require('../cascade'); // startAndSend is NOT used — intentionally omitted
-const { registerCascadeInstance } = require('../poller');
+const { registerCascadeInstance, pollNow } = require('../poller');
 const { resolveInst } = require('./route-helpers');
+const { broadcastAll } = require('../ws');
 
 // Security: Method whitelist to prevent arbitrary LS method invocation
 const ALLOWED_LS_METHODS = new Set([
@@ -59,6 +60,14 @@ module.exports = function setupCascadeRoutes(app) {
             const inst = resolveInst(req);
             sendMessage(cascadeId, message, { ...opts, inst }).catch(e => console.error('[Cascade send error]', e.message));
             res.json({ ok: true, cascadeId });
+
+            // V7: Proactive WS trigger — notify all frontends immediately that
+            // a bot/API client just injected activity into this conversation.
+            // Without this, the sidebar only updates on the next poller cycle (1-5s delay).
+            broadcastAll({ type: 'conversations_updated' });
+            // Delayed pollNow gives LS ~500ms to start processing, then forces
+            // step cache fill + steps_new broadcast to anyone watching this chat.
+            setTimeout(() => pollNow().catch(() => {}), 500);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -81,6 +90,10 @@ module.exports = function setupCascadeRoutes(app) {
             }
             sendMessage(cascadeId, message, opts).catch(e => console.error('[Cascade submit error]', e.message));
             res.json({ cascadeId });
+
+            // V7: Proactive WS trigger for submit (new conversation + message)
+            broadcastAll({ type: 'conversations_updated' });
+            setTimeout(() => pollNow().catch(() => {}), 500);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -128,6 +141,11 @@ module.exports = function setupCascadeRoutes(app) {
 
             console.log(`[DirectChat] Response: ${result.text ? result.text.substring(0, 80) + '...' : '(empty)'} (step ${result.stepIndex})`);
             res.json(result);
+
+            // V7: When the bot reads the response, the cascade is DONE.
+            // Force a final broadcast so the UI reflects the completed state.
+            broadcastAll({ type: 'conversations_updated' });
+            setTimeout(() => pollNow().catch(() => {}), 300);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

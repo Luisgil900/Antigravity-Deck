@@ -67,6 +67,34 @@ module.exports = function setupConversationsRoutes(app) {
                 } catch { /* skip unreachable instances */ }
             }
 
+            // Inyectar datos en tiempo real de la caché del backend para evitar latencia del Engine
+            const poller = require('../poller');
+            for (const id of Object.keys(filtered)) {
+                try {
+                    const cacheInfo = require('../step-cache').stepCache[id];
+                    if (cacheInfo) {
+                        const cacheTotal = (cacheInfo.baseIndex || 0) + cacheInfo.steps.length;
+                        // Only override if cache has MORE steps (never regress)
+                        if (cacheTotal > (filtered[id].stepCount || 0)) {
+                            filtered[id].stepCount = cacheTotal;
+                        }
+                        if (cacheInfo.lastUpdateTime) {
+                            filtered[id].lastModifiedTime = cacheInfo.lastUpdateTime;
+                        }
+                    } else {
+                        // Fallback: use poller's step count map if no cache
+                        const pollerCount = poller._lastCascadeStepCountMap?.[id];
+                        if (pollerCount && pollerCount > (filtered[id].stepCount || 0)) {
+                            filtered[id].stepCount = pollerCount;
+                        }
+                    }
+                } catch { }
+            }
+
+
+            // Prevent browser/proxy caching — list must always be fresh
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
             res.json({ trajectorySummaries: filtered });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -103,6 +131,32 @@ module.exports = function setupConversationsRoutes(app) {
                     }
                 } catch { }
             }
+            
+            // Inyectar datos en tiempo real de la caché del backend
+            const pollerRef = require('../poller');
+            for (const id of Object.keys(merged.trajectorySummaries)) {
+                try {
+                    const cacheInfo = require('../step-cache').stepCache[id];
+                    if (cacheInfo) {
+                        const cacheTotal = (cacheInfo.baseIndex || 0) + cacheInfo.steps.length;
+                        if (cacheTotal > (merged.trajectorySummaries[id].stepCount || 0)) {
+                            merged.trajectorySummaries[id].stepCount = cacheTotal;
+                        }
+                        if (cacheInfo.lastUpdateTime) {
+                            merged.trajectorySummaries[id].lastModifiedTime = cacheInfo.lastUpdateTime;
+                        }
+                    } else {
+                        const pollerCount = pollerRef._lastCascadeStepCountMap?.[id];
+                        if (pollerCount && pollerCount > (merged.trajectorySummaries[id].stepCount || 0)) {
+                            merged.trajectorySummaries[id].stepCount = pollerCount;
+                        }
+                    }
+                } catch { }
+            }
+
+            // Prevent browser/proxy caching — list must always be fresh
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
             res.json(merged);
         }
         catch (e) { res.status(500).json({ error: e.message }); }
@@ -179,6 +233,61 @@ module.exports = function setupConversationsRoutes(app) {
     app.get('/api/user', async (req, res) => {
         try { res.json(await callApi('GetUserStatus', {}, resolveInst(req))); }
         catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // User credits & subscription info (for dashboard monitoring)
+    app.get('/api/user/credits', async (req, res) => {
+        try {
+            const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'IDE not connected' });
+            const [userStatus, subStatus, modelData] = await Promise.all([
+                callApi('GetUserStatus', {}, inst).catch(() => null),
+                callApi('GetSubscriptionStatus', {}, inst).catch(() => null),
+                callApi('GetCascadeModelConfigData', {}, inst).catch(() => null),
+            ]);
+
+            const us = userStatus?.userStatus || {};
+            const sub = subStatus?.user || {};
+            const tier = us.userTier || sub.userTier || {};
+
+            // ═══ AI CREDITS (REAL) — from userTier.availableCredits[] ═══
+            // Structure: availableCredits: [{ creditType: "GOOGLE_ONE_AI", creditAmount: "1000", minimumCreditAmountForUsage: "50" }]
+            const aiCreditEntry = (tier.availableCredits || []).find(c => c.creditType === 'GOOGLE_ONE_AI') || {};
+            const availableCredits = aiCreditEntry.creditAmount ? parseInt(aiCreditEntry.creditAmount, 10) : null;
+            const minCreditsForUsage = aiCreditEntry.minimumCreditAmountForUsage ? parseInt(aiCreditEntry.minimumCreditAmountForUsage, 10) : null;
+
+            // Monthly prompt credits (internal budget — different from AI Credits)
+            const planStatus = us.planStatus || sub.planStatus || {};
+            const promptCredits = planStatus.availablePromptCredits ?? null;
+            const monthlyPromptCredits = planStatus.planInfo?.monthlyPromptCredits ?? null;
+
+            // Model quotas — sorted alphabetically by label for STABLE ordering
+            const models = (modelData?.clientModelConfigs || []).map(m => ({
+                label: m.label || m.name || '',
+                modelId: m.modelOrAlias?.model || m.modelOrAlias?.alias || '',
+                quota: m.quotaInfo?.remainingFraction ?? 1,
+                resetTime: m.quotaInfo?.resetTime || null,
+                isRecommended: !!m.isRecommended,
+            })).sort((a, b) => a.label.localeCompare(b.label));
+
+            res.json({
+                // Account info
+                email: sub.email || us.email || null,
+                name: sub.name || us.name || null,
+                tier: tier.name || null,
+                plan: planStatus.planInfo?.planName || null,
+                // AI Credits (REAL — from userTier, shown in Antigravity settings)
+                availableCredits,
+                minCreditsForUsage,
+                // Prompt Credits (internal budget — secondary metric)
+                promptCredits,
+                monthlyPromptCredits,
+                // Models with quotas (alphabetically sorted, stable order)
+                models,
+                // Timestamp
+                fetchedAt: new Date().toISOString(),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // Cache management

@@ -8,6 +8,52 @@ const { callApi } = require('../api');
 const { uriToFsPath, resolveInst } = require('./route-helpers');
 
 module.exports = function setupFilesRoutes(app) {
+    // GET /api/artifacts/:conversationId — list all artifacts for a conversation
+    // Reads directly from disk: ~/.gemini/antigravity/brain/{conversationId}/
+    // An artifact = a .md file that has a companion .metadata.json file
+    app.get('/api/artifacts/:conversationId', (req, res) => {
+        try {
+            const convId = req.params.conversationId;
+            if (!convId || !/^[a-f0-9-]+$/i.test(convId)) {
+                return res.status(400).json({ error: 'Invalid conversation ID' });
+            }
+            const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain', convId);
+            if (!fs.existsSync(brainDir)) {
+                return res.json({ artifacts: [] });
+            }
+            const files = fs.readdirSync(brainDir);
+            const artifacts = [];
+            for (const file of files) {
+                // Look for .md files that have a companion .metadata.json
+                if (!file.endsWith('.md')) continue;
+                const metaFile = file + '.metadata.json';
+                if (!files.includes(metaFile)) continue;
+                // Skip .resolved files
+                if (file.includes('.resolved')) continue;
+                
+                const filePath = path.join(brainDir, file);
+                const metaPath = path.join(brainDir, metaFile);
+                try {
+                    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+                    const stat = fs.statSync(filePath);
+                    artifacts.push({
+                        name: file,
+                        path: filePath.replace(/\\/g, '/'),
+                        summary: meta.summary || '',
+                        type: meta.artifactType || 'unknown',
+                        updatedAt: meta.updatedAt || stat.mtime.toISOString(),
+                        sizeBytes: stat.size,
+                    });
+                } catch { /* skip malformed metadata */ }
+            }
+            // Sort by updatedAt descending (most recent first)
+            artifacts.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+            res.json({ artifacts, conversationId: convId });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // GET /api/file/read — for rendering artifacts like .md files
     // Security: only allows reading from .gemini paths (simple path check)
     app.get('/api/file/read', async (req, res) => {

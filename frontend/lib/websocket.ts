@@ -225,22 +225,47 @@ export function useWebSocket() {
         const offStepsNew = wsService.on('steps_new', (data) => {
             console.log('[WS] steps_new received:', (data.steps as Step[])?.length, 'for', (data.conversationId as string)?.substring(0, 8));
             setState(prev => {
+                let updatedConv = prev.conversations;
+                const convId = data.conversationId as string;
+                if (convId && updatedConv[convId]) {
+                    const stepInc = ((data.steps as any[]) || []).length;
+                    updatedConv = { 
+                        ...updatedConv, 
+                        [convId]: { 
+                            ...updatedConv[convId], 
+                            stepCount: (updatedConv[convId].stepCount || 0) + stepInc, 
+                            lastModifiedTime: new Date().toISOString() 
+                        } 
+                    };
+                }
+
                 if (data.conversationId && data.conversationId !== prev.currentConvId) {
                     console.log('[WS] steps_new SKIP: conv mismatch', (data.conversationId as string)?.substring(0, 8), '!=', prev.currentConvId?.substring(0, 8));
+                    if (updatedConv !== prev.conversations) return { ...prev, conversations: updatedConv };
                     return prev;
                 }
                 const newSteps = (data.steps as Step[]) || [];
                 if (newSteps.length === 0) return prev;
-                // Dedup: only append steps beyond current length
-                const currentLen = prev.steps.length;
-                const expectedStart = data.total ? (data.total as number) - newSteps.length : currentLen;
-                const skipCount = Math.max(0, currentLen - expectedStart);
-                const actualNew = newSteps.slice(skipCount);
-                console.log(`[WS] steps_new: ${newSteps.length} incoming, currentLen=${currentLen}, total=${data.total}, expectedStart=${expectedStart}, skipCount=${skipCount}, actualNew=${actualNew.length}`);
+                // Dedup robusta usando server absolute index:
+                const currentAbsoluteTotal = prev.baseIndex + prev.steps.length;
+                const incomingBaseIndex = (data.baseIndex as number) || 0;
+                
+                let actualNew: Step[] = [];
+                for (let i = 0; i < newSteps.length; i++) {
+                    // El índice absoluto que este nuevo step ocuparía en el servidor
+                    const stepAbsoluteIndex = incomingBaseIndex + ((data.total as number) - newSteps.length) + i;
+                    
+                    // Solo agregamos si el step está MÁS ALLÁ de lo que conocemos localmente
+                    if (stepAbsoluteIndex >= currentAbsoluteTotal) {
+                        actualNew.push(newSteps[i]);
+                    }
+                }
+
+                console.log(`[WS] steps_new: ${newSteps.length} incoming, currAbsTotal=${currentAbsoluteTotal}, actualNew=${actualNew.length}`);
                 if (actualNew.length === 0) return prev;
                 // Update stepCount from backend metadata
                 const newStepCount = data.baseIndex !== undefined
-                    ? ((data.baseIndex as number) + ((data.total as number) || (currentLen + actualNew.length)))
+                    ? ((data.baseIndex as number) + ((data.total as number) || (prev.steps.length + actualNew.length)))
                     : prev.stepCount + actualNew.length;
                 return {
                     ...prev,
@@ -451,3 +476,5 @@ export function useWebSocket() {
 
     return { ...state, selectConversation, loadConversations, loadOlder };
 }
+
+
