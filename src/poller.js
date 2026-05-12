@@ -11,7 +11,7 @@ const { countBinarySteps, decodeBinarySteps } = require('./protobuf');
 // Instead, broadcast/broadcastAll are lazy-loaded inside functions that need them.
 function _broadcast(data, targetConvId) { return require('./ws').broadcast(data, targetConvId); }
 function _broadcastAll(data) { return require('./ws').broadcastAll(data); }
-const { stepCache, getStepCountAndStatus, ensureCached, detectApiStartIndex, fetchingSet } = require('./step-cache');
+const { stepCache, getStepCountAndStatus, ensureCached, detectApiStartIndex, fetchingSet, persistStepCountsThrottled, getPersistedStepCount } = require('./step-cache');
 const { handleAutoAccept, startAutoAcceptPolling } = require('./auto-accept');
 
 // --- State ---
@@ -101,11 +101,17 @@ async function pollNow() {
                         const cacheEntry = _sc[cascadeId];
                         const cacheStepCount = cacheEntry ? (cacheEntry.baseIndex || 0) + cacheEntry.steps.length : 0;
                         const engineStepCount = info.stepCount || 0;
-                        lastCascadeStepCountMap[cascadeId] = Math.max(cacheStepCount, engineStepCount);
+                        // V10.2f: Include persisted floor in max calculation
+                        const persistedFloor = getPersistedStepCount(cascadeId);
+                        const effectiveCount = Math.max(cacheStepCount, engineStepCount, persistedFloor);
+                        if (engineStepCount < effectiveCount && effectiveCount > 0) {
+                            console.log(`[!] REGRESSION BLOCKED: ${cascadeId.substring(0,8)} engine=${engineStepCount} < effective=${effectiveCount} (cache=${cacheStepCount}, floor=${persistedFloor})`);
+                        }
+                        lastCascadeStepCountMap[cascadeId] = effectiveCount;
                         convToPoll.set(cascadeId, {
                             status,
                             trajectoryId: info.trajectoryId,
-                            stepCount: Math.max(cacheStepCount, engineStepCount),
+                            stepCount: effectiveCount,
                             summary: info.summary || '',
                             lastModifiedTime: (cacheEntry?.lastUpdateTime && cacheStepCount > engineStepCount)
                                 ? cacheEntry.lastUpdateTime
@@ -469,6 +475,8 @@ async function pollConversation(activeConvId, info) {
                 baseIndex: cache.baseIndex || 0,
             }, activeConvId);
             console.log(`[WS] broadcast steps_new: ${newStepsToAdd.length} steps for ${activeConvId.substring(0, 8)} (total: ${cache.steps.length})`);
+            // V10.2f: Persist step counts when new steps arrive
+            persistStepCountsThrottled();
         }
 
         // Protect stepCount from regression — never let Engine's stale count overwrite a higher real count

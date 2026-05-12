@@ -1,6 +1,9 @@
 // === Step Cache & Fetching ===
 // Manages the step cache, fetching steps (JSON + binary protobuf), and ensuring cached data.
+// V10.2f: Added persistent step count floor to survive Deck restarts.
 
+const fs = require('fs');
+const path = require('path');
 const { lsConfig, lsInstances, BATCH_SIZE, STEP_WINDOW_SIZE } = require('./config');
 const { callApi } = require('./api');
 const { countBinarySteps, decodeBinarySteps } = require('./protobuf');
@@ -8,14 +11,83 @@ const { countBinarySteps, decodeBinarySteps } = require('./protobuf');
 const stepCache = {};       // { convId: { steps: [], stepCount: N, baseIndex: M } }
 const fetchingSet = new Set(); // per-conversation fetching lock
 
+// === V10.2f: Step Count Persistence (Anti-Regression Shield) ===
+// Persists {convId → {stepCount, lastUpdateTime}} to disk so step counts
+// survive Deck restarts. Prevents UI from showing 0 steps after restart
+// when the Engine hasn't fully indexed yet.
+
+const STEP_COUNTS_FILE = path.join(__dirname, '..', 'data', 'step-counts.json');
+let _persistedStepCounts = {};  // { convId: { stepCount, lastUpdateTime } }
+let _persistThrottleTimer = null;
+const PERSIST_THROTTLE_MS = 30000; // Write to disk at most every 30s
+
+function loadPersistedStepCounts() {
+    try {
+        if (fs.existsSync(STEP_COUNTS_FILE)) {
+            _persistedStepCounts = JSON.parse(fs.readFileSync(STEP_COUNTS_FILE, 'utf-8'));
+            const count = Object.keys(_persistedStepCounts).length;
+            if (count > 0) {
+                console.log(`[StepCache] Loaded ${count} persisted step counts from disk`);
+            }
+        }
+    } catch (e) {
+        console.log(`[StepCache] Could not load persisted step counts: ${e.message}`);
+        _persistedStepCounts = {};
+    }
+}
+
+function persistStepCounts() {
+    try {
+        // Merge current cache into persisted (never regress)
+        for (const [convId, entry] of Object.entries(stepCache)) {
+            const realCount = (entry.baseIndex || 0) + entry.steps.length;
+            const existing = _persistedStepCounts[convId];
+            if (!existing || realCount > (existing.stepCount || 0)) {
+                _persistedStepCounts[convId] = {
+                    stepCount: realCount,
+                    lastUpdateTime: entry.lastUpdateTime || new Date().toISOString(),
+                };
+            }
+        }
+        // Ensure data directory exists
+        const dataDir = path.dirname(STEP_COUNTS_FILE);
+        if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+        fs.writeFileSync(STEP_COUNTS_FILE, JSON.stringify(_persistedStepCounts, null, 2), 'utf-8');
+    } catch (e) {
+        console.log(`[StepCache] Could not persist step counts: ${e.message}`);
+    }
+}
+
+function persistStepCountsThrottled() {
+    if (_persistThrottleTimer) return; // Already scheduled
+    _persistThrottleTimer = setTimeout(() => {
+        _persistThrottleTimer = null;
+        persistStepCounts();
+    }, PERSIST_THROTTLE_MS);
+}
+
+function getPersistedStepCount(convId) {
+    return _persistedStepCounts[convId]?.stepCount || 0;
+}
+
+// Load on module init
+loadPersistedStepCounts();
+
 // --- Step count ---
 
 async function getStepCountAndStatus(convId, callFn = null) {
     const apiFn = callFn || ((m, b) => callApi(m, b));
     const summaries = await apiFn('GetAllCascadeTrajectories', {});
     const info = summaries?.trajectorySummaries?.[convId];
+    const engineCount = info?.stepCount || 0;
+    // V10.2f: Apply persisted floor — never regress below what we've seen before
+    const persistedCount = getPersistedStepCount(convId);
+    const effectiveCount = Math.max(engineCount, persistedCount);
+    if (engineCount < persistedCount && persistedCount > 0) {
+        console.log(`[StepCache] FLOOR APPLIED: ${convId.substring(0,8)} engine=${engineCount} < persisted=${persistedCount}`);
+    }
     return {
-        stepCount: info?.stepCount || 0,
+        stepCount: effectiveCount,
         status: info?.status || null,
         trajectoryId: info?.trajectoryId || null,
     };
@@ -167,6 +239,8 @@ async function ensureCached(convId, inst = null) {
         
         stepCache[convId] = newEntry;
         console.log(`[✓] Cached ${steps.length}/${effectiveStepCount} steps (window from ${baseIndex})${hasGaps ? ' (with gaps)' : ''}`);
+        // V10.2f: Persist step counts to disk (throttled)
+        persistStepCountsThrottled();
     } catch (e) {
         console.log(`[!] Load error: ${e.message}`);
         // On error during refresh, keep existing cache intact (don't delete it)
@@ -186,4 +260,4 @@ function detectApiStartIndex(stepsLength, expectedRange, requestedFrom) {
     return stepsLength > expectedRange ? 0 : requestedFrom;
 }
 
-module.exports = { stepCache, ensureCached, getStepCountAndStatus, fetchAllSteps, detectApiStartIndex, fetchingSet };
+module.exports = { stepCache, ensureCached, getStepCountAndStatus, fetchAllSteps, detectApiStartIndex, fetchingSet, persistStepCounts, persistStepCountsThrottled, getPersistedStepCount };

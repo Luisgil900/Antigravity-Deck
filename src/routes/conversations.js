@@ -69,24 +69,21 @@ module.exports = function setupConversationsRoutes(app) {
 
             // Inyectar datos en tiempo real de la caché del backend para evitar latencia del Engine
             const poller = require('../poller');
+            const { getPersistedStepCount } = require('../step-cache');
             for (const id of Object.keys(filtered)) {
                 try {
                     const cacheInfo = require('../step-cache').stepCache[id];
-                    if (cacheInfo) {
-                        const cacheTotal = (cacheInfo.baseIndex || 0) + cacheInfo.steps.length;
-                        // Only override if cache has MORE steps (never regress)
-                        if (cacheTotal > (filtered[id].stepCount || 0)) {
-                            filtered[id].stepCount = cacheTotal;
-                        }
-                        if (cacheInfo.lastUpdateTime) {
-                            filtered[id].lastModifiedTime = cacheInfo.lastUpdateTime;
-                        }
-                    } else {
-                        // Fallback: use poller's step count map if no cache
-                        const pollerCount = poller._lastCascadeStepCountMap?.[id];
-                        if (pollerCount && pollerCount > (filtered[id].stepCount || 0)) {
-                            filtered[id].stepCount = pollerCount;
-                        }
+                    // V10.2f: Triple source max — cache, poller, persisted floor
+                    const cacheTotal = cacheInfo ? (cacheInfo.baseIndex || 0) + cacheInfo.steps.length : 0;
+                    const pollerCount = poller._lastCascadeStepCountMap?.[id] || 0;
+                    const persistedFloor = getPersistedStepCount(id);
+                    const bestCount = Math.max(cacheTotal, pollerCount, persistedFloor, filtered[id].stepCount || 0);
+                    
+                    if (bestCount > (filtered[id].stepCount || 0)) {
+                        filtered[id].stepCount = bestCount;
+                    }
+                    if (cacheInfo?.lastUpdateTime) {
+                        filtered[id].lastModifiedTime = cacheInfo.lastUpdateTime;
                     }
                 } catch { }
             }
@@ -134,22 +131,21 @@ module.exports = function setupConversationsRoutes(app) {
             
             // Inyectar datos en tiempo real de la caché del backend
             const pollerRef = require('../poller');
+            const { getPersistedStepCount: getFloor } = require('../step-cache');
             for (const id of Object.keys(merged.trajectorySummaries)) {
                 try {
                     const cacheInfo = require('../step-cache').stepCache[id];
-                    if (cacheInfo) {
-                        const cacheTotal = (cacheInfo.baseIndex || 0) + cacheInfo.steps.length;
-                        if (cacheTotal > (merged.trajectorySummaries[id].stepCount || 0)) {
-                            merged.trajectorySummaries[id].stepCount = cacheTotal;
-                        }
-                        if (cacheInfo.lastUpdateTime) {
-                            merged.trajectorySummaries[id].lastModifiedTime = cacheInfo.lastUpdateTime;
-                        }
-                    } else {
-                        const pollerCount = pollerRef._lastCascadeStepCountMap?.[id];
-                        if (pollerCount && pollerCount > (merged.trajectorySummaries[id].stepCount || 0)) {
-                            merged.trajectorySummaries[id].stepCount = pollerCount;
-                        }
+                    // V10.2f: Triple source max — cache, poller, persisted floor
+                    const cacheTotal = cacheInfo ? (cacheInfo.baseIndex || 0) + cacheInfo.steps.length : 0;
+                    const pollerCount = pollerRef._lastCascadeStepCountMap?.[id] || 0;
+                    const persistedFloor = getFloor(id);
+                    const bestCount = Math.max(cacheTotal, pollerCount, persistedFloor, merged.trajectorySummaries[id].stepCount || 0);
+                    
+                    if (bestCount > (merged.trajectorySummaries[id].stepCount || 0)) {
+                        merged.trajectorySummaries[id].stepCount = bestCount;
+                    }
+                    if (cacheInfo?.lastUpdateTime) {
+                        merged.trajectorySummaries[id].lastModifiedTime = cacheInfo.lastUpdateTime;
                     }
                 } catch { }
             }
