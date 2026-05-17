@@ -14,3 +14,5 @@ C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260501-0000-01-security
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260502-0000-01-security.log.gz
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260503-0000-01-security.log.gz
 C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260505-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260515-0000-01-security.log.gz
+C:\Users\luisg\Music\ANTIGRAVITY\Antigravity-Deck\logs\20260516-0100-01-security.log.gz
