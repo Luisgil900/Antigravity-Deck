@@ -31,43 +31,60 @@ function baseHeaders(conn) {
 }
 
 // --- JSON API call (Connect Protocol) ---
-// Fix #86: Node 18+ native fetch() ignores https.Agent — use http/https.request() directly
-// so rejectUnauthorized: false actually takes effect on self-signed certs.
 // inst is optional — if omitted, uses global lsConfig
-function callApi(method, body = {}, inst = null) {
-    return new Promise((resolve, reject) => {
-        const conn = resolveConn(inst);
-        const data = JSON.stringify(body);
-        const transport = conn.useTls ? https : http;
-        const req = transport.request({
-            hostname: conn.host, port: conn.port,
-            path: `/exa.language_server_pb.LanguageServerService/${method}`,
-            method: 'POST',
-            headers: { ...baseHeaders(conn), 'Content-Length': Buffer.byteLength(data) },
-            timeout: inst ? 10000 : 30000,
-            rejectUnauthorized: false,
-        }, (res) => {
-            const chunks = [];
-            res.on('data', c => chunks.push(c.toString()));
-            res.on('end', () => {
-                if (res.statusCode >= 400) { reject(new Error(`API ${res.statusCode}`)); return; }
-                try { resolve(JSON.parse(chunks.join(''))); }
-                catch (e) { reject(new Error(`API parse error: ${e.message}`)); }
+async function callApi(method, body = {}, inst = null, retryCount = 0) {
+    try {
+        return await new Promise((resolve, reject) => {
+            const conn = resolveConn(inst);
+            const data = JSON.stringify(body);
+            const transport = conn.useTls ? https : http;
+            const req = transport.request({
+                hostname: conn.host, port: conn.port,
+                path: `/exa.language_server_pb.LanguageServerService/${method}`,
+                method: 'POST',
+                headers: { ...baseHeaders(conn), 'Content-Length': Buffer.byteLength(data) },
+                timeout: inst ? 15000 : 30000,
+                rejectUnauthorized: false,
+            }, (res) => {
+                const chunks = [];
+                res.on('data', c => chunks.push(c.toString()));
+                res.on('end', () => {
+                    if (res.statusCode === 401 || res.statusCode === 403) {
+                        reject({ type: 'CSRF_ERROR', status: res.statusCode });
+                        return;
+                    }
+                    if (res.statusCode >= 400) { reject(new Error(`API ${res.statusCode}`)); return; }
+                    try { resolve(JSON.parse(chunks.join(''))); }
+                    catch (e) { reject(new Error(`API parse error: ${e.message}`)); }
+                });
             });
+            req.on('error', reject);
+            req.on('timeout', () => { req.destroy(); reject(new Error('API timeout')); });
+            req.write(data);
+            req.end();
         });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('API timeout')); });
-        req.write(data);
-        req.end();
-    });
+    } catch (err) {
+        if (err.type === 'CSRF_ERROR' && retryCount < 2) {
+            console.log(`[!] CSRF expired (Status ${err.status}) on ${method}. Attempting re-detection...`);
+            try {
+                const detector = require('./detector');
+                await detector.rescanNow();
+                console.log(`[*] Re-detection complete. Retrying ${method} (${retryCount + 1}/2)...`);
+                return callApi(method, body, inst, retryCount + 1);
+            } catch (detectorErr) {
+                console.error(`[!] Failed to recover CSRF: ${detectorErr.message}`);
+                throw new Error(`CSRF Failure: ${err.status}`);
+            }
+        }
+        throw err;
+    }
 }
 
 // --- Fire-and-forget for streaming RPCs ---
 // HandleCascadeUserInteraction closes stream after processing.
-// "socket hang up" / "ECONNRESET" are treated as SUCCESS.
 // inst is optional — if omitted, uses global lsConfig
-function callApiFireAndForget(method, body = {}, inst = null) {
-    return new Promise((resolve) => {
+async function callApiFireAndForget(method, body = {}, inst = null, retryCount = 0) {
+    const result = await new Promise((resolve) => {
         let conn;
         try { conn = resolveConn(inst); }
         catch { resolve({ ok: false, error: 'Not configured' }); return; }
@@ -79,9 +96,13 @@ function callApiFireAndForget(method, body = {}, inst = null) {
             path: `/exa.language_server_pb.LanguageServerService/${method}`,
             method: 'POST',
             headers: { ...baseHeaders(conn), 'Content-Length': Buffer.byteLength(data) },
-            timeout: 3000,
+            timeout: 5000,
             rejectUnauthorized: false,
         }, (res) => {
+            if (res.statusCode === 401 || res.statusCode === 403) {
+                resolve({ ok: false, type: 'CSRF_ERROR', status: res.statusCode });
+                return;
+            }
             const chunks = [];
             res.on('data', c => chunks.push(c.toString()));
             res.on('end', () => resolve({ ok: res.statusCode < 400, status: res.statusCode, data: chunks.join('') }));
@@ -98,8 +119,17 @@ function callApiFireAndForget(method, body = {}, inst = null) {
         req.write(data);
         req.end();
     });
-}
 
+    if (result.type === 'CSRF_ERROR' && retryCount < 2) {
+        console.log(`[!] CSRF expired on fire-and-forget ${method}. Attempting re-detection...`);
+        try {
+            const detector = require('./detector');
+            await detector.rescanNow();
+            return callApiFireAndForget(method, body, inst, retryCount + 1);
+        } catch { }
+    }
+    return result;
+}
 // --- Binary Protobuf API call for paginated step fetching ---
 // Antigravity LS JSON API may ignore startIndex/endIndex and return a capped number of steps (~598). This applies to both macOS and Windows.
 // Binary protobuf requests (Content-Type: application/proto) correctly respect pagination.

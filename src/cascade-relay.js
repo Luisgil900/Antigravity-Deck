@@ -12,6 +12,7 @@
 
 const { getStepCountAndStatus, stepCache, ensureCached, detectApiStartIndex } = require('./step-cache');
 const { callApi } = require('./api');
+const { sendMessage } = require('./cascade');
 
 // ── Status classification ────────────────────────────────────────────────────
 
@@ -28,6 +29,65 @@ const ERROR_STATUSES = new Set([
     'CASCADE_RUN_STATUS_FAILED',
 ]);
 
+// ── Heuristics for incomplete responses ──────────────────────────────────
+
+function isIncomplete(text, step = null) {
+    if (!text) return false;
+
+    // Nivel 0: Validación de StopReason (Verdad Absoluta del Motor)
+    // Si el motor dice que terminó por razones naturales, NO continuamos independientemente de la puntuación.
+    const stopReason = (step?.plannerResponse?.stopReason || step?.stopReason || '').toLowerCase();
+
+    // Razones que SÍ indican truncamiento real
+    const truncatedReasons = ['max_tokens', 'length', 'interrupted', 'overloaded', 'max_output_tokens'];
+    if (truncatedReasons.some(r => stopReason.includes(r))) {
+        return true;
+    }
+
+    // Razones que indican fin exitoso
+    const completeReasons = ['end_turn', 'stop', 'complete', 'finished', 'model_produced_output'];
+    if (completeReasons.some(r => stopReason.includes(r))) {
+        return false;
+    }
+
+    // Nivel 1: Integridad de JSON (Crítico para V11)
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+            JSON.parse(trimmed);
+            return false; // Si el JSON es válido, está completo.
+        } catch (e) {
+            return true;
+        }
+    }
+
+    // Nivel 2: Balance de bloques de código
+    const codeBlockCount = (text.match(/```/g) || []).length;
+    if (codeBlockCount % 2 !== 0) return true;
+
+    if (trimmed.length === 0) return false;
+
+    // Nivel 3: Heurística de Puntuación (Solo si no hay StopReason claro)
+    // Reducimos la sensibilidad para evitar redundancia en Flash 3
+    const lastChar = trimmed[trimmed.length - 1];
+    const sentenceEndings = ['.', '!', '?', '"', "'", '}', ']', ')', '>', '`', ';', ':', '*', '-']; // Añadimos : * -
+
+    if (!sentenceEndings.includes(lastChar)) {
+        // Excepciones técnicas para trading y arquitectura V11
+        const words = trimmed.split(/\s+/);
+        const lastWord = words[words.length - 1].toLowerCase();
+        const techExceptions = ['usd', 'usdt', 'etc', 'vol', 'tf', 'ok', 'ready', 'active', 'v11', 'id', 'bot'];
+        if (techExceptions.includes(lastWord)) return false;
+
+        // Si la respuesta es muy corta (< 100 caracteres) y termina en letra, 
+        // probablemente sea un saludo o confirmación de Flash.
+        if (trimmed.length < 100 && /[a-zA-Z0-9]/.test(lastChar)) return false;
+
+        return true;
+    }
+
+    return false;
+}
 // ── Adaptive poll interval ───────────────────────────────────────────────────
 // Fast at start (catch quick responses), slower over time (reduce load)
 
@@ -65,6 +125,9 @@ async function waitAndExtractResponse(cascadeId, opts = {}) {
     let consecutiveErrors = 0;
     const MAX_CONSECUTIVE_ERRORS = 10; // likely CSRF expired or LS down
 
+    let accumulatedText = '';
+    let lastScannedIndex = fromStepIndex;
+
     while (Date.now() - start < timeoutMs) {
         if (shouldAbort()) {
             log('system', `[relay] Aborted for ${sid}`);
@@ -93,21 +156,41 @@ async function waitAndExtractResponse(cascadeId, opts = {}) {
         if (ERROR_STATUSES.has(status)) {
             log('system', `[relay] Cascade ${sid} is ${status} — attempting final scan`);
             // Try to extract any last response before the error
-            const result = await fetchAndScan(cascadeId, fromStepIndex, inst, log);
-            if (result.text) return result;
+            const result = await fetchAndScan(cascadeId, lastScannedIndex, inst, log);
+            if (result.text) {
+                accumulatedText += (accumulatedText ? '\n' : '') + result.text;
+                return { ...result, text: accumulatedText };
+            }
             log('system', `[relay] No response found in errored cascade ${sid}`);
-            return noResult(stepCount);
+            return accumulatedText ? { text: accumulatedText, stepIndex: lastScannedIndex, stepCount, stepType: 'PARTIAL_ERROR' } : noResult(stepCount);
         }
 
         // Check if cascade is done (not RUNNING or WAITING)
         if (DONE_STATUSES.has(status) && stepCount > 0) {
             log('system', `[relay] ${sid} is ${status || 'IDLE'} (${stepCount} steps) — scanning for response`);
 
-            const result = await fetchAndScan(cascadeId, fromStepIndex, inst, log);
+            const result = await fetchAndScan(cascadeId, lastScannedIndex, inst, log);
 
             if (result.text) {
-                log('system', `[relay] ✓ Found response at step ${result.stepIndex} (${result.stepType}): "${result.text.substring(0, 80)}..."`);
-                return result;
+                log('system', `[relay] ✓ Found part at step ${result.stepIndex} (${result.stepType})`);
+                accumulatedText += (accumulatedText ? '\n' : '') + result.text;
+                lastScannedIndex = result.stepIndex;
+
+                if (isIncomplete(result.text, result.step)) {
+                    log('system', `[relay] ⚠ Response is incomplete, triggering Auto-Continue for ${sid}`);
+                    try {
+                        await sendMessage(cascadeId, "Continúa exactamente desde donde te quedaste", { inst });
+                        // Wait a bit and keep polling for the next part
+                        await sleep(1000);
+                        continue;
+                    } catch (e) {
+                        log('error', `[relay] Failed to send continue command: ${e.message}`);
+                        return { ...result, text: accumulatedText };
+                    }
+                }
+
+                log('system', `[relay] ✓ Complete response extracted for ${sid} (${accumulatedText.length} chars)`);
+                return { ...result, text: accumulatedText };
             }
 
             // No content found — likely intermediate IDLE (between thinking + tool execution)
@@ -120,7 +203,7 @@ async function waitAndExtractResponse(cascadeId, opts = {}) {
 
     // Timeout
     log('system', `[relay] Timeout (${timeoutMs / 1000}s) for ${sid}`);
-    return noResult(0);
+    return accumulatedText ? { text: accumulatedText, stepIndex: lastScannedIndex, stepCount: 0, stepType: 'PARTIAL_TIMEOUT' } : noResult(0);
 }
 
 // ── Internal: Fetch steps + scan for response ────────────────────────────────
@@ -179,19 +262,18 @@ async function fetchAndScan(cascadeId, fromStepIndex, inst, log) {
         // NOTIFY_USER — always user-visible
         if (s.type === 'CORTEX_STEP_TYPE_NOTIFY_USER' && s.notifyUser) {
             const text = extractContent(s);
-            if (text) return { text, stepIndex: i, stepCount: realStepCount, stepType: s.type };
+            if (text) return { text, stepIndex: i, stepCount: realStepCount, stepType: s.type, step: s };        
         }
 
         // PLANNER_RESPONSE — skip thinking steps (have toolCalls = agent planning, not responding)
         if (s.type === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE' && s.plannerResponse) {
             // Case 40: if step has toolCalls, it's a thinking/planning step → skip
-            if (s.plannerResponse.toolCalls && s.plannerResponse.toolCalls.length > 0) continue;
+            if (s.plannerResponse.toolCalls && s.plannerResponse.toolCalls.length > 0) continue;        
 
             const text = extractContent(s);
-            if (text) return { text, stepIndex: i, stepCount: realStepCount, stepType: s.type };
+            if (text) return { text, stepIndex: i, stepCount: realStepCount, stepType: s.type, step: s };        
             // No content → continue scanning
-        }
-    }
+        }    }
 
     log('system', `[relay] No response step found in ${sid} (${cache.steps.length} steps, scanning from ${fromStepIndex + 1})`);
     return noResult(realStepCount);

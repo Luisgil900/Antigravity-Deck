@@ -19,15 +19,16 @@ import type { AgentMessage } from '@/lib/agent-api';
 interface ChatPanelProps {
     agentWs: UseAgentWsReturn;
     workspaces: string[];
+    initialCascadeId?: string | null;
 }
 
-// ── Message bubble ──────────────────────────────────────────────────────
+// ── Message bubble ──────────────────────────────────────────────────────────
 
 const MessageBubble = memo(function MessageBubble({ msg }: { msg: AgentMessage }) {
     if (msg.role === 'system') {
         return (
             <div className="flex justify-center py-1">
-                <span className="text-[10px] text-muted-foreground/40 italic text-center max-w-[80%]">
+                <span className="text-[10px] text-muted-foreground/40 italic text-center max-w-[80%]">  
                     {msg.content}
                 </span>
             </div>
@@ -63,9 +64,9 @@ const MessageBubble = memo(function MessageBubble({ msg }: { msg: AgentMessage }
     );
 });
 
-// ── Main Panel ──────────────────────────────────────────────────────────
+// ── Main Panel ───────────────────────────────────────────────────────────────
 
-export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
+export function AgentChatPanel({ agentWs, workspaces, initialCascadeId }: ChatPanelProps) {
     const { state, sessionId, cascadeId, workspace, messages, error } = agentWs;
     const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
     const [inputText, setInputText] = useState('');
@@ -73,6 +74,15 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
 
     const isConnected = state === 'connected' || state === 'busy';
     const isBusy = state === 'busy';
+
+    // Auto-connect si tenemos un cascadeId inicial
+    useEffect(() => {
+        if (initialCascadeId && !isConnected && state === 'disconnected') {
+            const targetWs = workspaces[0] || 'ANTIGRAVITY';
+            console.log('[ChatPanel] Auto-connecting for initialCascadeId:', initialCascadeId);
+            agentWs.connect(targetWs);
+        }
+    }, [initialCascadeId, isConnected, state, workspaces, agentWs]);
 
     // Auto-scroll on new messages
     useEffect(() => {
@@ -104,12 +114,12 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
         }
     };
 
-    // ── Not connected state ─────────────────────────────────────────────
+    // ── Not connected state ─────────────────────────────────────────────────────
 
     if (!isConnected && state !== 'connecting' && state !== 'reconnecting') {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-4 px-6">
-                <div className="w-12 h-12 rounded-2xl bg-muted/10 flex items-center justify-center">
+                <div className="w-12 h-12 rounded-2xl bg-muted/10 flex items-center justify-center">    
                     <MessageSquare className="h-6 w-6 text-muted-foreground/15" />
                 </div>
 
@@ -151,7 +161,7 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
         );
     }
 
-    // ── Connecting / Reconnecting state ─────────────────────────────────
+    // ── Connecting / Reconnecting state ─────────────────────────────────────────
 
     if (state === 'connecting' || state === 'reconnecting') {
         return (
@@ -164,10 +174,10 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
         );
     }
 
-    // ── Connected state ─────────────────────────────────────────────────
+    // ── Connected state ─────────────────────────────────────────────────────────
 
     return (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full bg-background/50">
             {/* Session info bar */}
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/20 shrink-0">
                 <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
@@ -175,14 +185,14 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
                     <span className="font-mono">{sessionId?.substring(0, 8)}</span>
                     <span>•</span>
                     <span>{workspace}</span>
-                    {cascadeId && (
+                    {(cascadeId || initialCascadeId) && (
                         <>
                             <span>•</span>
-                            <span className="font-mono">#{cascadeId.substring(0, 8)}</span>
+                            <span className="font-mono">#{(cascadeId || initialCascadeId)?.substring(0, 8)}</span>
                         </>
                     )}
                 </div>
-                <span className={cn('text-[9px]', isBusy ? 'text-amber-400' : 'text-emerald-400')}>
+                <span className={cn('text-[9px]', isBusy ? 'text-amber-400' : 'text-emerald-400')}>     
                     {isBusy ? 'Processing…' : 'Ready'}
                 </span>
             </div>
@@ -195,7 +205,7 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
                 {isBusy && messages[messages.length - 1]?.role === 'user' && (
                     <div className="flex justify-start">
                         <div className="bg-muted/10 rounded-lg px-3 py-2">
-                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/30" />
+                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/30" />       
                         </div>
                     </div>
                 )}
@@ -203,7 +213,7 @@ export function AgentChatPanel({ agentWs, workspaces }: ChatPanelProps) {
             </div>
 
             {/* Input + Controls */}
-            <div className="border-t border-border/20 p-2 space-y-1.5 shrink-0">
+            <div className="border-t border-border/20 p-2 space-y-1.5 shrink-0 bg-background/80 backdrop-blur-sm">
                 <div className="flex gap-1.5">
                     <Input
                         value={inputText}

@@ -191,6 +191,18 @@ export default function Home() {
     localStorage.setItem('antigravity-current-conv-id', JSON.stringify(currentConvId));
   }, [currentConvId]);
 
+  // Listen for external conversation switch requests (e.g. from Agent Hub)
+  useEffect(() => {
+    const handler = (e: any) => {
+      const { conversationId } = e.detail || {};
+      if (conversationId) {
+        console.log('[Page] Switching conversation via event:', conversationId);
+        selectConversation(conversationId);
+      }
+    };
+    window.addEventListener('switch-conversation', handler);
+    return () => window.removeEventListener('switch-conversation', handler);
+  }, [selectConversation]);
   useEffect(() => {
     const storedConvId = getStoredValue<string | null>('antigravity-current-conv-id', null);
     if (storedConvId) {

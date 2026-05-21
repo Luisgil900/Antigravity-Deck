@@ -36,13 +36,14 @@ module.exports = function setupCascadeRoutes(app) {
         try {
             const inst = resolveInst(req);
             if (!inst) return res.status(503).json({ error: 'No language server connected' });
-            const cascadeId = await startCascade(inst);
+            // V11.2: Pass workspaceFolderUri to bind cascade to the correct workspace folder
+            const cascadeId = await startCascade(inst, inst.workspaceFolderUri);
             registerCascadeInstance(cascadeId, inst);
             res.json({ cascadeId });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // Send a message to an existing cascade (non-blocking — fires stream, returns immediately)
+    // Send a message to an existing cascade (non-blocking — fires stream, returns immediately)       
     app.post('/api/cascade/send', async (req, res) => {
         try {
             const { cascadeId, message, modelId, images, imageBase64 } = req.body;
@@ -74,22 +75,37 @@ module.exports = function setupCascadeRoutes(app) {
     // Start a new cascade and send a message (non-blocking)
     app.post('/api/cascade/submit', async (req, res) => {
         try {
-            const { message, modelId, images, imageBase64 } = req.body;
+            const { message, modelId, images, imageBase64, workspace } = req.body;
             if (!message) {
                 return res.status(400).json({ error: 'message is required' });
             }
-            // Start cascade synchronously, then fire-and-forget the message
+            
             const inst = resolveInst(req);
-            const cascadeId = await startCascade(inst);
+            // V11.2: Pass workspaceFolderUri to ensure visibility in PC Frontend
+            const cascadeId = await startCascade(inst, inst?.workspaceFolderUri);
             registerCascadeInstance(cascadeId, inst);
+
+            // REGISTRO PROACTIVO EN AGENT HUB:
+            // Creamos una sesión "virtual" para que la UI detecte la actividad de la CLI
+            const sessionManager = require('../agent-session-manager');
+            const session = sessionManager.createSession({
+                workspace: workspace || inst?.workspaceName || 'CLI_Sovereign',
+                cascadeId: cascadeId,
+                transport: 'cli-terminal',
+                stepSoftLimit: 1000
+            });
+
             const opts = { modelId, inst };
             if (images && images.length > 0) {
                 opts.media = images;
             } else if (imageBase64) {
                 opts.imageBase64 = imageBase64;
             }
-            sendMessage(cascadeId, message, opts).catch(e => console.error('[Cascade submit error]', e.message));
-            res.json({ cascadeId });
+
+            // Enviamos el mensaje a través de la sesión para que se rastree el estado
+            session.sendMessage(message, opts).catch(e => console.error('[CLI Session error]', e.message));
+            
+            res.json({ cascadeId, sessionId: session.id });
 
             // V7: Proactive WS trigger for submit (new conversation + message)
             broadcastAll({ type: 'conversations_updated' });
@@ -206,7 +222,7 @@ module.exports = function setupCascadeRoutes(app) {
                     }
                     console.log(`[ManualInteract] --- FAILED on ${inst.workspaceName}: ${result.error || result.data}, trying next...`);
                 } catch (e) {
-                    console.log(`[ManualInteract] !!! Error on ${inst.workspaceName}: ${e.message}`);
+                    console.log(`[ManualInteract] !!! Error on ${inst.workspaceName}: ${e.message}`);   
                 }
             }
             console.log(`[ManualInteract] No instance could ${isReject ? 'reject' : 'accept'} ${cascadeId.substring(0, 8)}`);
@@ -215,11 +231,11 @@ module.exports = function setupCascadeRoutes(app) {
     });
 
     // Cancel active cascade invocation
-    app.post('/api/cascade/:id/cancel', async (req, res) => {
+    app.post('/api/cancel', async (req, res) => {
         try {
             const inst = resolveInst(req);
             const result = await callApi('CancelCascadeInvocation', {
-                cascadeId: req.params.id,
+                cascadeId: req.body.cascadeId,
             }, inst);
             res.json(result);
         } catch (e) { res.status(500).json({ error: e.message }); }
@@ -265,7 +281,7 @@ module.exports = function setupCascadeRoutes(app) {
     // Delete a cascade conversation
     app.delete('/api/cascade/:id', async (req, res) => {
         try {
-            await callApi('DeleteCascadeTrajectory', { cascadeId: req.params.id }, resolveInst(req));
+            await callApi('DeleteCascadeTrajectory', { cascadeId: req.params.id }, resolveInst(req));   
             const { cleanupCascade } = require('../cleanup');
             cleanupCascade(req.params.id);
             res.json({ success: true });
@@ -291,15 +307,15 @@ module.exports = function setupCascadeRoutes(app) {
     app.post('/api/ls/:method', async (req, res) => {
         try {
             const method = req.params.method;
-            
+
             // Validate method against whitelist
             if (!ALLOWED_LS_METHODS.has(method)) {
-                return res.status(403).json({ 
+                return res.status(403).json({
                     error: 'Method not allowed',
                     hint: 'This LS method is not in the allowed list for security reasons'
                 });
             }
-            
+
             const inst = resolveInst(req);
             const result = await callApi(method, req.body || {}, inst);
             res.json(result);

@@ -6,19 +6,21 @@ import { wsService } from '@/lib/ws-service';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Trash2, RefreshCw, Loader2, AlertCircle, Users } from 'lucide-react';
+import { Trash2, RefreshCw, Loader2, AlertCircle, Users, Eye, ExternalLink } from 'lucide-react';
 import { SESSION_STATE_CONFIG, TRANSPORT_CONFIG, formatTimestamp } from '@/lib/agent-utils';
 import { fetchAgentSessions, destroyAgentSession } from '@/lib/agent-api';
 import type { AgentSessionInfo } from '@/lib/agent-api';
 
-// ── Session Card (memoized) ─────────────────────────────────────────────
+// ── Session Card (memoized) ──────────────────────────────────────────────────
 
 const SessionCard = memo(function SessionCard({
     session,
     onDestroy,
+    onViewChat,
 }: {
     session: AgentSessionInfo;
     onDestroy: (id: string) => void;
+    onViewChat: (cascadeId: string) => void;
 }) {
     const transport = TRANSPORT_CONFIG[session.transport] || TRANSPORT_CONFIG.unknown;
     const stateConf = SESSION_STATE_CONFIG[session.state] || SESSION_STATE_CONFIG.IDLE;
@@ -60,9 +62,20 @@ const SessionCard = memo(function SessionCard({
 
                 {/* Workspace + cascade */}
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground/60">
-                    <span>{session.workspace}</span>
-                    {session.cascadeIdShort && session.cascadeIdShort !== '--------' && (
-                        <span className="font-mono">#{session.cascadeIdShort}</span>
+                    <span className="truncate max-w-[120px]">{session.workspace}</span>
+                    {session.cascadeId && session.cascadeId !== '--------' && (
+                        <div className="flex items-center gap-1.5">
+                           <span className="font-mono text-[9px] opacity-70">#{session.cascadeId.substring(0, 8)}</span>
+                           <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-5 w-5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20"
+                                onClick={() => onViewChat(session.cascadeId!)}
+                                title="Abrir chat en detalle"
+                            >
+                                <Eye className="h-3 w-3" />
+                           </Button>
+                        </div>
                     )}
                 </div>
 
@@ -83,13 +96,13 @@ const SessionCard = memo(function SessionCard({
                     </div>
                 </div>
 
-                {/* Destroy action */}
-                <div className="flex justify-end">
+                {/* Actions */}
+                <div className="flex justify-end gap-1">
                     {confirming ? (
                         <div className="flex items-center gap-1.5">
                             <span className="text-[10px] text-red-400">Destroy?</span>
-                            <Button size="sm" variant="destructive" className="h-6 text-[10px] px-2"
-                                onClick={() => { onDestroy(session.id); setConfirming(false); }}>
+                            <Button size="sm" variant="destructive" className="h-6 text-[10px] px-2"    
+                                onClick={() => { onDestroy(session.id); setConfirming(false); }}>       
                                 Yes
                             </Button>
                             <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2"
@@ -100,7 +113,7 @@ const SessionCard = memo(function SessionCard({
                     ) : (
                         <Button variant="ghost" size="icon" className="h-6 w-6"
                             onClick={() => setConfirming(true)} title="Destroy session">
-                            <Trash2 className="h-3 w-3 text-muted-foreground/30 hover:text-red-400" />
+                            <Trash2 className="h-3 w-3 text-muted-foreground/30 hover:text-red-400" />  
                         </Button>
                     )}
                 </div>
@@ -109,7 +122,7 @@ const SessionCard = memo(function SessionCard({
     );
 });
 
-// ── Main Panel ──────────────────────────────────────────────────────────
+// ── Main Panel ───────────────────────────────────────────────────────────────
 
 export function AgentSessionsPanel() {
     const [sessions, setSessions] = useState<AgentSessionInfo[]>([]);
@@ -187,6 +200,14 @@ export function AgentSessionsPanel() {
         } catch { /* WS event will handle removal */ }
     }, []);
 
+    const handleViewChat = useCallback((cascadeId: string) => {
+        // Emitir evento global para que la página principal cambie de conversación
+        // Saltando el filtrado por workspace si es necesario.
+        window.dispatchEvent(new CustomEvent('switch-conversation', { 
+            detail: { conversationId: cascadeId } 
+        }));
+    }, []);
+
     if (loading) {
         return (
             <div className="flex items-center justify-center h-full">
@@ -200,7 +221,7 @@ export function AgentSessionsPanel() {
             <div className="flex flex-col items-center justify-center h-full gap-3 px-6">
                 <AlertCircle className="h-6 w-6 text-red-400/50" />
                 <p className="text-xs text-red-400/70">{error}</p>
-                <Button size="sm" variant="outline" onClick={loadSessions} className="text-[10px]">
+                <Button size="sm" variant="outline" onClick={loadSessions} className="text-[10px]">     
                     <RefreshCw className="h-3 w-3 mr-1" /> Retry
                 </Button>
             </div>
@@ -210,13 +231,13 @@ export function AgentSessionsPanel() {
     if (sessions.length === 0) {
         return (
             <div className="flex flex-col items-center justify-center h-full gap-3 px-6">
-                <div className="w-12 h-12 rounded-2xl bg-muted/10 flex items-center justify-center">
+                <div className="w-12 h-12 rounded-2xl bg-muted/10 flex items-center justify-center">    
                     <Users className="h-6 w-6 text-muted-foreground/15" />
                 </div>
                 <div className="text-center space-y-1">
                     <p className="text-xs text-muted-foreground/50 font-medium">No active agent sessions</p>
                     <p className="text-[10px] text-muted-foreground/30">
-                        Connect from the Chat tab or from an external agent via WebSocket/HTTP API
+                        Connect from the Chat tab or from an external agent via WebSocket/HTTP API      
                     </p>
                 </div>
             </div>
@@ -226,7 +247,12 @@ export function AgentSessionsPanel() {
     return (
         <div className="p-3 space-y-2 overflow-y-auto h-full">
             {sessions.map(s => (
-                <SessionCard key={s.id} session={s} onDestroy={handleDestroy} />
+                <SessionCard 
+                    key={s.id} 
+                    session={s} 
+                    onDestroy={handleDestroy} 
+                    onViewChat={handleViewChat}
+                />
             ))}
         </div>
     );

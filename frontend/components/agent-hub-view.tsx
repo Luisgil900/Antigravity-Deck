@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Users, MessageSquare, Settings2, ScrollText } from 'lucide-react';
+import { Users, MessageSquare, Settings2, ScrollText, ArrowLeft, Bot } from 'lucide-react';
 import { useAgentWs } from '@/hooks/use-agent-ws';
 import { AgentSessionsPanel } from '@/components/agent-hub/sessions-panel';
 import { AgentChatPanel } from '@/components/agent-hub/chat-panel';
@@ -10,19 +10,21 @@ import { AgentConfigPanel } from '@/components/agent-hub/config-panel';
 import { AgentLogsPanel } from '@/components/agent-hub/logs-panel';
 import { API_BASE } from '@/lib/config';
 import { authHeaders } from '@/lib/auth';
+import { Button } from '@/components/ui/button';
 
 export function AgentHubView() {
     const agentWs = useAgentWs();
     const [workspaces, setWorkspaces] = useState<string[]>([]);
+    const [fullScreenChatId, setFullScreenChatId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState('sessions');
 
     // Fetch workspace list for the Chat panel's workspace selector
     useEffect(() => {
         (async () => {
             try {
-                const res = await fetch(`${API_BASE}/api/workspaces`, { headers: authHeaders() });
+                const res = await fetch(`${API_BASE}/api/workspaces`, { headers: authHeaders() });      
                 if (res.ok) {
                     const data = await res.json();
-                    // data is an array of workspace objects with .name
                     const names = Array.isArray(data)
                         ? data.map((w: { name?: string; workspaceName?: string }) => w.name || w.workspaceName || '').filter(Boolean)
                         : [];
@@ -32,8 +34,58 @@ export function AgentHubView() {
         })();
     }, []);
 
+    // Escuchar el evento de visualización de chat detallado
+    useEffect(() => {
+        const handler = (e: any) => {
+            const { conversationId } = e.detail || {};
+            if (conversationId) {
+                console.log('[AgentHub] Entering full screen chat:', conversationId);
+                setFullScreenChatId(conversationId);
+            }
+        };
+        window.addEventListener('switch-conversation', handler);
+        return () => window.removeEventListener('switch-conversation', handler);
+    }, []);
+
+    const handleBackToSessions = useCallback(() => {
+        setFullScreenChatId(null);
+        setActiveTab('sessions');
+    }, []);
+
     // Chat tab badge: show dot when connected
     const chatConnected = agentWs.state === 'connected' || agentWs.state === 'busy';
+
+    if (fullScreenChatId) {
+        return (
+            <div className="flex flex-col h-full bg-background animate-in fade-in slide-in-from-right-4 duration-300">
+                {/* Header Pantalla Completa */}
+                <div className="flex items-center gap-3 px-4 py-2 border-b border-border/30 shrink-0 bg-muted/5">
+                    <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8 hover:bg-muted/20" 
+                        onClick={handleBackToSessions}
+                    >
+                        <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="flex flex-col">
+                        <span className="text-xs font-semibold text-foreground/80 flex items-center gap-1.5">
+                            <Bot className="h-3 w-3 text-indigo-400" /> Detalle del Agente
+                        </span>
+                        <span className="text-[10px] text-muted-foreground font-mono">#{fullScreenChatId.substring(0, 12)}</span>
+                    </div>
+                </div>
+                
+                <div className="flex-1 min-h-0">
+                    <AgentChatPanel 
+                        agentWs={agentWs} 
+                        workspaces={workspaces} 
+                        initialCascadeId={fullScreenChatId} 
+                    />
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-full bg-background">
@@ -43,7 +95,7 @@ export function AgentHubView() {
             </div>
 
             {/* Tabs */}
-            <Tabs defaultValue="sessions" className="flex flex-col flex-1 min-h-0">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0">
                 <TabsList className="w-full justify-start rounded-none border-b border-border/20 bg-transparent h-8 px-2">
                     <TabsTrigger value="sessions" className="text-[10px] h-6 gap-1 px-2 data-[state=active]:bg-muted/10">
                         <Users className="h-3 w-3" /> Sessions

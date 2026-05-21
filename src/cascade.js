@@ -4,8 +4,13 @@ const { callApi, callApiStream } = require('./api');
 
 // Create a new Cascade conversation
 // inst: optional LS instance to route to (default: global lsConfig)
-async function startCascade(inst = null) {
-    const result = await callApi('StartCascade', {}, inst);
+// workspaceFolderUri: optional URI to bind the cascade to a specific workspace
+async function startCascade(inst = null, workspaceFolderUri = null) {
+    const body = {};
+    if (workspaceFolderUri) {
+        body.workspaceFolderUri = workspaceFolderUri;
+    }
+    const result = await callApi('StartCascade', body, inst);
     return result.cascadeId;
 }
 
@@ -55,7 +60,7 @@ async function sendMessage(cascadeId, text, options = {}) {
 // Convenience: create a new conversation and send a message in one call
 async function startAndSend(text, options = {}) {
     const inst = options.inst || null;
-    const cascadeId = await startCascade(inst);
+    const cascadeId = await startCascade(inst, options.workspaceFolderUri || inst?.workspaceFolderUri);
     console.log(`[Cascade] New conversation: ${cascadeId}`);
     const result = await sendMessage(cascadeId, text, { ...options, inst });
     return { cascadeId, result };
